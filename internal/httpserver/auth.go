@@ -10,6 +10,7 @@ import (
 	"github.com/bootdotdev/learn-web-security/internal/auth/mfa"
 	"github.com/bootdotdev/learn-web-security/internal/auth/passwordreset"
 	"github.com/bootdotdev/learn-web-security/internal/auth/passwords"
+	"github.com/bootdotdev/learn-web-security/internal/auth/returnto"
 	"github.com/bootdotdev/learn-web-security/internal/auth/sessions"
 	"github.com/bootdotdev/learn-web-security/internal/httpx"
 	"github.com/bootdotdev/learn-web-security/internal/logging"
@@ -35,7 +36,14 @@ type authHandler struct {
 	appOrigin      string
 }
 
-func newAuthHandler(accountStore *accounts.Store, mfaStore *mfa.Store, passwordResetStore *passwordreset.Store, renderer *templates.Renderer, logger *logging.Logger, appOrigin string) *authHandler {
+func newAuthHandler(
+	accountStore *accounts.Store,
+	mfaStore *mfa.Store,
+	passwordResetStore *passwordreset.Store,
+	renderer *templates.Renderer,
+	logger *logging.Logger,
+	appOrigin string,
+) *authHandler {
 	return &authHandler{
 		accounts:       accountStore,
 		renderer:       renderer,
@@ -52,7 +60,12 @@ func (handler *authHandler) LoginPage(responseWriter http.ResponseWriter, reques
 	if request.URL.Query().Get("verification") == "restart" {
 		errorMessage = "That verification attempt is no longer valid. Log in again."
 	}
-	if err := handler.renderLogin(responseWriter, http.StatusOK, errorMessage, returnTo); err != nil {
+	if err := handler.renderLogin(
+		responseWriter,
+		http.StatusOK,
+		errorMessage,
+		returnTo,
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
@@ -88,7 +101,12 @@ func (handler *authHandler) Login(responseWriter http.ResponseWriter, request *h
 			"failureReason": loginFailureReason(found),
 			"returnTo":      returnTo,
 		})
-		if err := handler.renderLogin(responseWriter, http.StatusUnauthorized, "Invalid email or password", returnTo); err != nil {
+		if err := handler.renderLogin(
+			responseWriter,
+			http.StatusUnauthorized,
+			"Invalid email or password",
+			returnTo,
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -171,11 +189,19 @@ func (handler *authHandler) Signup(responseWriter http.ResponseWriter, request *
 	}
 	passwordLength := utf8.RuneCountInString(password)
 	if passwordLength < minimumPasswordLength {
-		_ = handler.renderSignup(responseWriter, http.StatusBadRequest, "Password must be at least 8 characters")
+		_ = handler.renderSignup(
+			responseWriter,
+			http.StatusBadRequest,
+			"Password must be at least 8 characters",
+		)
 		return
 	}
 	if passwordLength > passwords.MaxLength {
-		_ = handler.renderSignup(responseWriter, http.StatusBadRequest, "Password must not exceed 128 characters")
+		_ = handler.renderSignup(
+			responseWriter,
+			http.StatusBadRequest,
+			"Password must not exceed 128 characters",
+		)
 		return
 	}
 
@@ -184,10 +210,19 @@ func (handler *authHandler) Signup(responseWriter http.ResponseWriter, request *
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	user, err := handler.accounts.CreateCustomer(request.Context(), email, displayName, passwordHash)
+	user, err := handler.accounts.CreateCustomer(
+		request.Context(),
+		email,
+		displayName,
+		passwordHash,
+	)
 	if err != nil {
 		if errors.Is(err, accounts.ErrEmailExists) {
-			_ = handler.renderSignup(responseWriter, http.StatusConflict, "An account already exists for that email")
+			_ = handler.renderSignup(
+				responseWriter,
+				http.StatusConflict,
+				"An account already exists for that email",
+			)
 			return
 		}
 		handler.internalError(responseWriter, request, err)
@@ -222,8 +257,18 @@ func parseForm(_ int64, renderer *templates.Renderer) middleware {
 					heading = "Content Too Large"
 					message = "The request body is too large."
 				}
-				if renderErr := httpx.RespondWithErrorPage(responseWriter, renderer, statusCode, heading, message); renderErr != nil {
-					http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				if renderErr := httpx.RespondWithErrorPage(
+					responseWriter,
+					renderer,
+					statusCode,
+					heading,
+					message,
+				); renderErr != nil {
+					http.Error(
+						responseWriter,
+						http.StatusText(http.StatusInternalServerError),
+						http.StatusInternalServerError,
+					)
 				}
 				return
 			}
@@ -238,6 +283,16 @@ func (handler *authHandler) Logout(responseWriter http.ResponseWriter, request *
 		handler.internalError(responseWriter, request, err)
 		return
 	}
+	cookie, err := request.Cookie(sessions.CookieName)
+	if err != nil {
+		handler.internalError(responseWriter, request, err)
+		return
+	}
+	sessionToken := cookie.Value
+	if err := handler.accounts.RevokeSession(request.Context(), sessionToken); err != nil {
+		handler.internalError(responseWriter, request, err)
+		return
+	}
 	sessions.ClearCookie(responseWriter)
 	if challengeToken != "" {
 		clearTOTPLoginChallengeCookie(responseWriter)
@@ -245,7 +300,11 @@ func (handler *authHandler) Logout(responseWriter http.ResponseWriter, request *
 	http.Redirect(responseWriter, request, "/", http.StatusFound)
 }
 
-func (handler *authHandler) renderLogin(responseWriter http.ResponseWriter, statusCode int, errorMessage, returnTo string) error {
+func (handler *authHandler) renderLogin(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	errorMessage, returnTo string,
+) error {
 	return handler.renderer.Render(responseWriter, statusCode, "login", authPage{
 		Title:    "Log In",
 		Error:    errorMessage,
@@ -253,7 +312,11 @@ func (handler *authHandler) renderLogin(responseWriter http.ResponseWriter, stat
 	})
 }
 
-func (handler *authHandler) renderSignup(responseWriter http.ResponseWriter, statusCode int, errorMessage string) error {
+func (handler *authHandler) renderSignup(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	errorMessage string,
+) error {
 	return handler.renderer.Render(responseWriter, statusCode, "signup", authPage{
 		Title: "Create Account",
 		Error: errorMessage,
@@ -261,31 +324,56 @@ func (handler *authHandler) renderSignup(responseWriter http.ResponseWriter, sta
 }
 
 func (handler *authHandler) invalidForm(responseWriter http.ResponseWriter) {
-	if err := httpx.RespondWithErrorPage(responseWriter, handler.renderer, http.StatusBadRequest, "Invalid Request", "The submitted form is invalid."); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	if err := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		http.StatusBadRequest,
+		"Invalid Request",
+		"The submitted form is invalid.",
+	); err != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *authHandler) internalError(responseWriter http.ResponseWriter, request *http.Request, err error) {
+func (handler *authHandler) internalError(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
 	_ = handler.logger.Event("unhandled_error", map[string]any{
 		"method":  request.Method,
 		"path":    request.URL.Path,
 		"message": err.Error(),
 	})
-	if renderErr := httpx.RespondWithErrorPage(responseWriter, handler.renderer, http.StatusInternalServerError, "Unhandled Error", err.Error()); renderErr != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	if renderErr := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		http.StatusInternalServerError,
+		"Unhandled Error",
+		err.Error(),
+	); renderErr != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *authHandler) logAuthenticationEvent(_ *http.Request, eventName string, fields map[string]any) {
+func (handler *authHandler) logAuthenticationEvent(
+	_ *http.Request,
+	eventName string,
+	fields map[string]any,
+) {
 	_ = handler.logger.Event(eventName, fields)
 }
 
 func safeReturnTo(value string) string {
-	if value == "" {
-		return "/"
-	}
-	return value
+	return returnto.Safe(value)
 }
 
 func nullableUserID(user accounts.User, found bool) any {

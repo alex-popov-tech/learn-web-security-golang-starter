@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/bootdotdev/learn-web-security/internal/database/dbgen"
@@ -20,7 +21,7 @@ const defaultSessionTTL = 30 * 24 * time.Hour
 var ErrEmailExists = errors.New("an account already exists for that email")
 
 func NormalizeEmail(email string) string {
-	return email
+	return strings.TrimSpace(strings.ToLower(email))
 }
 
 type User struct {
@@ -102,7 +103,10 @@ func (store *Store) FindUserByID(ctx context.Context, userID int64) (User, bool,
 	}, true, nil
 }
 
-func (store *Store) CreateCustomer(ctx context.Context, email, displayName, passwordHash string) (User, error) {
+func (store *Store) CreateCustomer(
+	ctx context.Context,
+	email, displayName, passwordHash string,
+) (User, error) {
 	userID, err := store.queries.CreateCustomer(ctx, dbgen.CreateCustomerParams{
 		Email:        email,
 		DisplayName:  displayName,
@@ -124,15 +128,25 @@ func (store *Store) CreateCustomer(ctx context.Context, email, displayName, pass
 	return user, nil
 }
 
-func (store *Store) UpdatePasswordHash(ctx context.Context, userID int64, passwordHash string) error {
-	if err := store.queries.UpdateUserPasswordHash(ctx, dbgen.UpdateUserPasswordHashParams{PasswordHash: passwordHash, ID: userID}); err != nil {
+func (store *Store) UpdatePasswordHash(
+	ctx context.Context,
+	userID int64,
+	passwordHash string,
+) error {
+	if err := store.queries.UpdateUserPasswordHash(
+		ctx,
+		dbgen.UpdateUserPasswordHashParams{PasswordHash: passwordHash, ID: userID},
+	); err != nil {
 		return fmt.Errorf("update password hash: %w", err)
 	}
 	return nil
 }
 
 func (store *Store) UpdateEmail(ctx context.Context, userID int64, email string) error {
-	_, err := store.queries.UpdateUserEmail(ctx, dbgen.UpdateUserEmailParams{Email: email, ID: userID})
+	_, err := store.queries.UpdateUserEmail(
+		ctx,
+		dbgen.UpdateUserEmailParams{Email: email, ID: userID},
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrEmailExists
 	}
@@ -177,7 +191,10 @@ func (store *Store) CreateSession(ctx context.Context, userID int64) (Session, e
 	}, nil
 }
 
-func (store *Store) CurrentSession(ctx context.Context, token string) (CurrentSession, bool, error) {
+func (store *Store) CurrentSession(
+	ctx context.Context,
+	token string,
+) (CurrentSession, bool, error) {
 	if token == "" {
 		return CurrentSession{}, false, nil
 	}
@@ -187,6 +204,9 @@ func (store *Store) CurrentSession(ctx context.Context, token string) (CurrentSe
 			return CurrentSession{}, false, nil
 		}
 		return CurrentSession{}, false, fmt.Errorf("find session: %w", err)
+	}
+	if row.RevokedAt != nil {
+		return CurrentSession{}, false, nil
 	}
 	expiresAt, err := time.Parse(time.RFC3339, row.ExpiresAt)
 	if err != nil || !store.now().Before(expiresAt) {

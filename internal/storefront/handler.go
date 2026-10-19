@@ -2,7 +2,6 @@ package storefront
 
 import (
 	"fmt"
-	"html/template"
 	"net/http"
 	"strings"
 
@@ -57,8 +56,8 @@ type currentUserView struct {
 
 type reviewView struct {
 	Review
-	BodyHTML template.HTML
-	CanEdit  bool
+	// BodyHTML template.HTML
+	CanEdit bool
 }
 
 type Handler struct {
@@ -69,7 +68,13 @@ type Handler struct {
 	maxProductResults int64
 }
 
-func NewHandler(store *Store, accountStore *accounts.Store, renderer *templates.Renderer, logger *logging.Logger, maxProductResults int) *Handler {
+func NewHandler(
+	store *Store,
+	accountStore *accounts.Store,
+	renderer *templates.Renderer,
+	logger *logging.Logger,
+	maxProductResults int,
+) *Handler {
 	return &Handler{
 		store:             store,
 		accountStore:      accountStore,
@@ -95,7 +100,12 @@ func (handler *Handler) Storefront(responseWriter http.ResponseWriter, request *
 		Current:  current,
 		Products: makeProductCards(products, cartQuantities, csrfToken(current)),
 	}
-	if err := handler.renderer.Render(responseWriter, http.StatusOK, "storefront", view); err != nil {
+	if err := handler.renderer.Render(
+		responseWriter,
+		http.StatusOK,
+		"storefront",
+		view,
+	); err != nil {
 		handler.renderFailure(responseWriter, request, err)
 	}
 }
@@ -109,7 +119,11 @@ func (handler *Handler) Search(responseWriter http.ResponseWriter, request *http
 	products := []Product{}
 	var err error
 	if query != "" {
-		products, err = handler.store.SearchProducts(request.Context(), query, handler.maxProductResults)
+		products, err = handler.store.SearchProducts(
+			request.Context(),
+			query,
+			handler.maxProductResults,
+		)
 		if err != nil {
 			handler.internalError(responseWriter, request, err)
 			return
@@ -166,13 +180,14 @@ func (handler *Handler) Product(responseWriter http.ResponseWriter, request *htt
 	remainingInventory := max(int64(0), product.InventoryCount-cartQuantities[product.ID])
 	maximumCartQuantity := min(int64(maxCartQuantity), remainingInventory)
 	view := productView{
-		Title:               product.Name,
-		Current:             current,
-		Product:             product,
-		Reviews:             makeReviewViews(reviews, current),
-		HasReviews:          len(reviews) > 0,
-		OutOfStock:          product.InventoryCount == 0,
-		AllInventoryInCart:  current != nil && remainingInventory == 0 && product.InventoryCount != 0,
+		Title:      product.Name,
+		Current:    current,
+		Product:    product,
+		Reviews:    makeReviewViews(reviews, current),
+		HasReviews: len(reviews) > 0,
+		OutOfStock: product.InventoryCount == 0,
+		AllInventoryInCart: current != nil && remainingInventory == 0 &&
+			product.InventoryCount != 0,
 		MaximumCartQuantity: maximumCartQuantity,
 	}
 	if err := handler.renderer.Render(responseWriter, http.StatusOK, "product", view); err != nil {
@@ -181,12 +196,26 @@ func (handler *Handler) Product(responseWriter http.ResponseWriter, request *htt
 }
 
 func (handler *Handler) productNotFound(responseWriter http.ResponseWriter) {
-	if err := httpx.RespondWithErrorPage(responseWriter, handler.renderer, http.StatusNotFound, "Product Not Found", "We couldn't find that product."); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	if err := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		http.StatusNotFound,
+		"Product Not Found",
+		"We couldn't find that product.",
+	); err != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *Handler) internalError(responseWriter http.ResponseWriter, request *http.Request, err error) {
+func (handler *Handler) internalError(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
 	if logErr := handler.logger.Event("unhandled_error", map[string]any{
 		"method":  request.Method,
 		"path":    request.URL.Path,
@@ -194,12 +223,26 @@ func (handler *Handler) internalError(responseWriter http.ResponseWriter, reques
 	}); logErr != nil {
 		fmt.Printf("Error logging unhandled error: %v\n", logErr)
 	}
-	if renderErr := httpx.RespondWithErrorPage(responseWriter, handler.renderer, http.StatusInternalServerError, "Unhandled Error", err.Error()); renderErr != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	if renderErr := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		http.StatusInternalServerError,
+		"Unhandled Error",
+		err.Error(),
+	); renderErr != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *Handler) renderFailure(responseWriter http.ResponseWriter, request *http.Request, err error) {
+func (handler *Handler) renderFailure(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
 	if logErr := handler.logger.Event("unhandled_error", map[string]any{
 		"method":  request.Method,
 		"path":    request.URL.Path,
@@ -207,10 +250,17 @@ func (handler *Handler) renderFailure(responseWriter http.ResponseWriter, reques
 	}); logErr != nil {
 		fmt.Printf("Error logging template failure: %v\n", logErr)
 	}
-	http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	http.Error(
+		responseWriter,
+		http.StatusText(http.StatusInternalServerError),
+		http.StatusInternalServerError,
+	)
 }
 
-func (handler *Handler) requestContext(responseWriter http.ResponseWriter, request *http.Request) (*currentUserView, map[int64]int64, bool) {
+func (handler *Handler) requestContext(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) (*currentUserView, map[int64]int64, bool) {
 	currentSession, found, err := sessions.Current(request, handler.accountStore)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -219,7 +269,10 @@ func (handler *Handler) requestContext(responseWriter http.ResponseWriter, reque
 	if !found {
 		return nil, map[int64]int64{}, true
 	}
-	cartQuantities, err := handler.accountStore.CartQuantities(request.Context(), currentSession.User.ID)
+	cartQuantities, err := handler.accountStore.CartQuantities(
+		request.Context(),
+		currentSession.User.ID,
+	)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
 		return nil, nil, false
@@ -243,15 +296,18 @@ func makeReviewViews(reviews []Review, current *currentUserView) []reviewView {
 	viewReviews := make([]reviewView, 0, len(reviews))
 	for _, review := range reviews {
 		viewReviews = append(viewReviews, reviewView{
-			Review:   review,
-			BodyHTML: template.HTML(review.Body), // Intentionally unsafe starter behavior for the XSS lesson.
-			CanEdit:  current != nil && current.ID == review.UserID,
+			Review:  review,
+			CanEdit: current != nil && current.ID == review.UserID,
 		})
 	}
 	return viewReviews
 }
 
-func makeProductCards(products []Product, cartQuantities map[int64]int64, csrfToken string) []productCard {
+func makeProductCards(
+	products []Product,
+	cartQuantities map[int64]int64,
+	csrfToken string,
+) []productCard {
 	cards := make([]productCard, 0, len(products))
 	for _, product := range products {
 		remainingInventory := max(int64(0), product.InventoryCount-cartQuantities[product.ID])

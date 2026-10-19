@@ -47,7 +47,15 @@ type Handler struct {
 	fulfillmentDelay time.Duration
 }
 
-func NewHandler(cartStore *cart.Store, orderStore *orders.Store, accountStore *accounts.Store, keyring *storage.Keyring, renderer *templates.Renderer, logger *logging.Logger, fulfillmentDelay time.Duration) *Handler {
+func NewHandler(
+	cartStore *cart.Store,
+	orderStore *orders.Store,
+	accountStore *accounts.Store,
+	keyring *storage.Keyring,
+	renderer *templates.Renderer,
+	logger *logging.Logger,
+	fulfillmentDelay time.Duration,
+) *Handler {
 	return &Handler{
 		cartStore:        cartStore,
 		orderStore:       orderStore,
@@ -80,7 +88,7 @@ func (handler *Handler) Page(responseWriter http.ResponseWriter, request *http.R
 
 func (handler *Handler) Submit(responseWriter http.ResponseWriter, request *http.Request) {
 	current, ok := handler.requireAuth(responseWriter, request)
-	if !ok {
+	if !ok || !handler.verifyCSRF(responseWriter, request, current.Session.CSRFToken) {
 		return
 	}
 	items, err := handler.cartStore.ListItems(request.Context(), current.User.ID)
@@ -93,15 +101,31 @@ func (handler *Handler) Submit(responseWriter http.ResponseWriter, request *http
 		return
 	}
 	if unavailableItem := firstUnavailable(items); unavailableItem != nil {
-		handler.renderCheckoutError(responseWriter, request, http.StatusConflict, current, items, unavailableItem.Name+" is no longer available in the requested quantity. Update your cart before checking out.")
+		handler.renderCheckoutError(
+			responseWriter,
+			request,
+			http.StatusConflict,
+			current,
+			items,
+			unavailableItem.Name+" is no longer available in the requested quantity. Update your cart before checking out.",
+		)
 		return
 	}
-	shippingDetails, discountCents, valid := handler.parseCheckoutForm(responseWriter, request)
+	shippingDetails, valid := handler.parseCheckoutForm(responseWriter, request)
 	if !valid {
 		return
 	}
-	if shippingDetails.Name == "" || shippingDetails.Address == "" || shippingDetails.City == "" || shippingDetails.Region == "" || shippingDetails.PostalCode == "" {
-		handler.renderCheckoutError(responseWriter, request, http.StatusBadRequest, current, items, "All shipping fields are required")
+	if shippingDetails.Name == "" || shippingDetails.Address == "" || shippingDetails.City == "" ||
+		shippingDetails.Region == "" ||
+		shippingDetails.PostalCode == "" {
+		handler.renderCheckoutError(
+			responseWriter,
+			request,
+			http.StatusBadRequest,
+			current,
+			items,
+			"All shipping fields are required",
+		)
 		return
 	}
 	_, err = acorn.Reserve(request.Context(), acorn.Request{
@@ -125,17 +149,38 @@ func (handler *Handler) Submit(responseWriter http.ResponseWriter, request *http
 		return
 	}
 	if unavailableItem := firstUnavailable(items); unavailableItem != nil {
-		handler.renderCheckoutError(responseWriter, request, http.StatusConflict, current, items, unavailableItem.Name+" is no longer available in the requested quantity. Update your cart before checking out.")
+		handler.renderCheckoutError(
+			responseWriter,
+			request,
+			http.StatusConflict,
+			current,
+			items,
+			unavailableItem.Name+" is no longer available in the requested quantity. Update your cart before checking out.",
+		)
 		return
 	}
-	order, err := handler.orderStore.CreateFromCart(request.Context(), current.User.ID, items, discountCents, shippingDetails, checkoutAdminNotes, handler.keyring)
+	order, err := handler.orderStore.CreateFromCart(
+		request.Context(),
+		current.User.ID,
+		items,
+		shippingDetails,
+		checkoutAdminNotes,
+		handler.keyring,
+	)
 	if errors.Is(err, orders.ErrInsufficientInventory) {
 		currentItems, listErr := handler.cartStore.ListItems(request.Context(), current.User.ID)
 		if listErr != nil {
 			handler.internalError(responseWriter, request, listErr)
 			return
 		}
-		handler.renderCheckoutError(responseWriter, request, http.StatusConflict, current, currentItems, orders.InsufficientInventoryMessage)
+		handler.renderCheckoutError(
+			responseWriter,
+			request,
+			http.StatusConflict,
+			current,
+			currentItems,
+			orders.InsufficientInventoryMessage,
+		)
 		return
 	}
 	if err != nil {
@@ -182,19 +227,38 @@ func (handler *Handler) Processing(responseWriter http.ResponseWriter, request *
 		CSPNonce:    httpx.CSPNonce(request.Context()),
 		DisplayName: current.User.DisplayName,
 	}
-	if err := handler.renderer.Render(responseWriter, http.StatusOK, "pawpal-processing", view); err != nil {
+	if err := handler.renderer.Render(
+		responseWriter,
+		http.StatusOK,
+		"pawpal-processing",
+		view,
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
-func (handler *Handler) parseCheckoutForm(responseWriter http.ResponseWriter, request *http.Request) (orders.ShippingDetails, int64, bool) {
-	fieldNames := []string{"shippingName", "shippingAddress", "shippingCity", "shippingRegion", "shippingPostalCode"}
+func (handler *Handler) parseCheckoutForm(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) (orders.ShippingDetails, bool) {
+	fieldNames := []string{
+		"shippingName",
+		"shippingAddress",
+		"shippingCity",
+		"shippingRegion",
+		"shippingPostalCode",
+	}
 	fieldValues := make(map[string]string, len(fieldNames))
 	for _, fieldName := range fieldNames {
 		fieldValue, err := httpx.FormValue(request, fieldName)
 		if err != nil {
-			handler.errorPage(responseWriter, http.StatusBadRequest, "Invalid Request", "The submitted form is invalid.")
-			return orders.ShippingDetails{}, 0, false
+			handler.errorPage(
+				responseWriter,
+				http.StatusBadRequest,
+				"Invalid Request",
+				"The submitted form is invalid.",
+			)
+			return orders.ShippingDetails{}, false
 		}
 		fieldValues[fieldName] = fieldValue
 	}
@@ -204,10 +268,16 @@ func (handler *Handler) parseCheckoutForm(responseWriter http.ResponseWriter, re
 		City:       strings.TrimSpace(fieldValues["shippingCity"]),
 		Region:     strings.TrimSpace(fieldValues["shippingRegion"]),
 		PostalCode: strings.TrimSpace(fieldValues["shippingPostalCode"]),
-	}, parseDiscount(request.PostForm.Get("discountCents")), true
+	}, true
 }
 
-func (handler *Handler) renderPage(responseWriter http.ResponseWriter, statusCode int, current accounts.CurrentSession, items []cart.Item, errorMessage string) error {
+func (handler *Handler) renderPage(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	current accounts.CurrentSession,
+	items []cart.Item,
+	errorMessage string,
+) error {
 	return handler.renderer.Render(responseWriter, statusCode, "checkout", pageView{
 		Title:       "Checkout",
 		Items:       items,
@@ -218,13 +288,23 @@ func (handler *Handler) renderPage(responseWriter http.ResponseWriter, statusCod
 	})
 }
 
-func (handler *Handler) renderCheckoutError(responseWriter http.ResponseWriter, request *http.Request, statusCode int, current accounts.CurrentSession, items []cart.Item, message string) {
+func (handler *Handler) renderCheckoutError(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	statusCode int,
+	current accounts.CurrentSession,
+	items []cart.Item,
+	message string,
+) {
 	if err := handler.renderPage(responseWriter, statusCode, current, items, message); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
-func (handler *Handler) requireAuth(responseWriter http.ResponseWriter, request *http.Request) (accounts.CurrentSession, bool) {
+func (handler *Handler) requireAuth(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) (accounts.CurrentSession, bool) {
 	current, found, err := sessions.Require(responseWriter, request, handler.accountStore)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -234,18 +314,49 @@ func (handler *Handler) requireAuth(responseWriter http.ResponseWriter, request 
 }
 
 func (handler *Handler) orderNotFound(responseWriter http.ResponseWriter) {
-	handler.errorPage(responseWriter, http.StatusNotFound, "Order Not Found", "We couldn't find that order.")
+	handler.errorPage(
+		responseWriter,
+		http.StatusNotFound,
+		"Order Not Found",
+		"We couldn't find that order.",
+	)
 }
 
-func (handler *Handler) errorPage(responseWriter http.ResponseWriter, statusCode int, heading, message string) {
-	if err := httpx.RespondWithErrorPage(responseWriter, handler.renderer, statusCode, heading, message); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+func (handler *Handler) errorPage(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	heading, message string,
+) {
+	if err := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		statusCode,
+		heading,
+		message,
+	); err != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *Handler) internalError(responseWriter http.ResponseWriter, request *http.Request, err error) {
-	_ = handler.logger.Event("unhandled_error", map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()})
-	handler.errorPage(responseWriter, http.StatusInternalServerError, "Unhandled Error", err.Error())
+func (handler *Handler) internalError(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
+	_ = handler.logger.Event(
+		"unhandled_error",
+		map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()},
+	)
+	handler.errorPage(
+		responseWriter,
+		http.StatusInternalServerError,
+		"Unhandled Error",
+		err.Error(),
+	)
 }
 
 func firstUnavailable(items []cart.Item) *cart.Item {
@@ -260,4 +371,35 @@ func firstUnavailable(items []cart.Item) *cart.Item {
 func parseDiscount(value string) int64 {
 	discount, _ := strconv.ParseInt(value, 10, 64)
 	return discount
+}
+
+func (handler *Handler) verifyCSRF(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	expectedToken string,
+) bool {
+	actualToken, err := httpx.FormValue(request, "csrfToken")
+	if err != nil {
+		handler.invalidRequest(responseWriter)
+		return false
+	}
+	if sessions.CSRFTokensMatch(expectedToken, actualToken) {
+		return true
+	}
+	handler.errorPage(
+		responseWriter,
+		http.StatusForbidden,
+		"Forbidden",
+		"Your request could not be verified.",
+	)
+	return false
+}
+
+func (handler *Handler) invalidRequest(responseWriter http.ResponseWriter) {
+	handler.errorPage(
+		responseWriter,
+		http.StatusBadRequest,
+		"Invalid Request",
+		"The submitted form is invalid.",
+	)
 }

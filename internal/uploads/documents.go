@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/bootdotdev/learn-web-security/internal/identifiers"
 )
 
 type Keyring interface {
@@ -19,7 +21,15 @@ type StoredDocument struct {
 	StoragePath string
 }
 
-func StoreDocument(contents []byte, uploadDirectory string, encryptionKeyring Keyring) (StoredDocument, bool, error) {
+func StoreDocument(
+	contents []byte,
+	uploadDirectory string,
+	encryptionKeyring Keyring,
+) (StoredDocument, bool, error) {
+	mime, extension, isValid := detectDocumentType(contents)
+	if !isValid {
+		return StoredDocument{}, false, nil
+	}
 	storedContents, encrypted, err := encryptDocument(contents, encryptionKeyring)
 	if err != nil {
 		return StoredDocument{}, false, err
@@ -27,17 +37,21 @@ func StoreDocument(contents []byte, uploadDirectory string, encryptionKeyring Ke
 	if err := os.MkdirAll(uploadDirectory, 0o755); err != nil {
 		return StoredDocument{}, false, fmt.Errorf("create upload directory: %w", err)
 	}
-	storagePath := filepath.Join(uploadDirectory, "uploaded-document")
+	storageName, _ := identifiers.NewUUID()
+	storagePath := filepath.Join(uploadDirectory, storageName+extension)
 	if encrypted {
 		storagePath += ".enc"
 	}
 	if err := writeDocument(storagePath, storedContents, encrypted); err != nil {
 		return StoredDocument{}, false, err
 	}
-	return StoredDocument{ContentType: "application/octet-stream", StoragePath: storagePath}, true, nil
+	return StoredDocument{
+		ContentType: mime,
+		StoragePath: storagePath,
+	}, true, nil
 }
 
-func detectDocumentType(contents []byte) (string, string, bool) {
+func detectDocumentType(contents []byte) (mime, extension string, isValid bool) {
 	if len(contents) >= 5 && string(contents[:5]) == "%PDF-" {
 		return "application/pdf", ".pdf", true
 	}

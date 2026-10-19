@@ -40,21 +40,38 @@ type Service struct {
 	client client
 }
 
+const fetchTimeout = 5 * time.Second
+
 func NewService() *Service {
-	return &Service{client: http.DefaultClient}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.ResponseHeaderTimeout = fetchTimeout
+	transport.TLSHandshakeTimeout = fetchTimeout
+	return &Service{client: &http.Client{
+		Timeout:   fetchTimeout,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}}
 }
 
 func (service *Service) Fetch(ctx context.Context, rawURL string, maxBytes int64) (Result, error) {
 	requestedURL, valid := allowedURL(rawURL)
 	if !valid {
-		return Result{}, &Error{Message: "Use an absolute HTTP or HTTPS URL."}
+		return Result{}, &Error{Message: "Use an HTTPS URL from an allowed image host."}
 	}
 	if maxBytes <= 0 {
 		return Result{}, errors.New("maximum image size must be positive")
 	}
-	requestContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	requestContext, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, requestedURL.String(), nil)
+	request, err := http.NewRequestWithContext(
+		requestContext,
+		http.MethodGet,
+		requestedURL.String(),
+		nil,
+	)
 	if err != nil {
 		return Result{}, &Error{Message: "Use an absolute HTTP or HTTPS URL."}
 	}
@@ -66,17 +83,25 @@ func (service *Service) Fetch(ctx context.Context, rawURL string, maxBytes int64
 		return Result{}, &Error{Message: "The image host could not be reached."}
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= http.StatusMultipleChoices && response.StatusCode < http.StatusBadRequest {
+	if response.StatusCode >= http.StatusMultipleChoices &&
+		response.StatusCode < http.StatusBadRequest {
 		return Result{}, &Error{Message: "Image URL redirects are not allowed."}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return Result{}, &Error{Message: fmt.Sprintf("The image host returned HTTP %d.", response.StatusCode)}
+		return Result{}, &Error{
+			Message: fmt.Sprintf("The image host returned HTTP %d.", response.StatusCode),
+		}
 	}
-	declaredContentType := strings.ToLower(strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0]))
+	declaredContentType := strings.ToLower(
+		strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0]),
+	)
 	if !strings.HasPrefix(declaredContentType, "image/") {
 		return Result{}, &Error{Message: "The URL did not return an image."}
 	}
-	if declaredLength, validLength := declaredContentLength(response.Header.Get("Content-Length")); validLength && declaredLength > float64(maxBytes) {
+	if declaredLength, validLength := declaredContentLength(
+		response.Header.Get("Content-Length"),
+	); validLength &&
+		declaredLength > float64(maxBytes) {
 		return Result{}, &Error{Message: "The image is larger than 1 MiB."}
 	}
 	imageBytes, err := readImageBytes(response.Body, maxBytes)
@@ -92,14 +117,23 @@ func (service *Service) Fetch(ctx context.Context, rawURL string, maxBytes int64
 		finalURL = response.Request.URL.String()
 	}
 	return Result{
-		RequestedURL: requestedURL.String(), FinalURL: finalURL, Status: response.StatusCode, ContentType: detectedContentType,
-		ByteLength: int64(len(imageBytes)), ImageDataURL: "data:" + detectedContentType + ";base64," + base64.StdEncoding.EncodeToString(imageBytes),
+		RequestedURL: requestedURL.String(),
+		FinalURL:     finalURL,
+		Status:       response.StatusCode,
+		ContentType:  detectedContentType,
+		ByteLength: int64(
+			len(imageBytes),
+		),
+		ImageDataURL: "data:" + detectedContentType + ";base64," + base64.StdEncoding.EncodeToString(
+			imageBytes,
+		),
 	}, nil
 }
 
 func allowedURL(rawURL string) (*url.URL, bool) {
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https") ||
+		parsed.Host != "storage.googleapis.com" || parsed.User != nil {
 		return nil, false
 	}
 	if parsed.Path == "" {
@@ -131,13 +165,15 @@ func readImageBytes(responseBody io.Reader, maxBytes int64) ([]byte, error) {
 }
 
 func detectImageContentType(imageBytes []byte) (string, bool) {
-	if len(imageBytes) >= 8 && bytes.Equal(imageBytes[:8], []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}) {
+	if len(imageBytes) >= 8 &&
+		bytes.Equal(imageBytes[:8], []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}) {
 		return "image/png", true
 	}
 	if len(imageBytes) >= 3 && bytes.Equal(imageBytes[:3], []byte{0xff, 0xd8, 0xff}) {
 		return "image/jpeg", true
 	}
-	if len(imageBytes) >= 12 && bytes.Equal(imageBytes[:4], []byte("RIFF")) && bytes.Equal(imageBytes[8:12], []byte("WEBP")) {
+	if len(imageBytes) >= 12 && bytes.Equal(imageBytes[:4], []byte("RIFF")) &&
+		bytes.Equal(imageBytes[8:12], []byte("WEBP")) {
 		return "image/webp", true
 	}
 	return "", false

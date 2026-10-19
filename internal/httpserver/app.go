@@ -2,12 +2,12 @@ package httpserver
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bootdotdev/learn-web-security/internal/account"
@@ -50,6 +50,7 @@ type Options struct {
 	FixtureDirectory        string
 	TemplateDirectory       string
 	PublicDirectory         string
+	DownloadSigningKey      [32]byte
 }
 
 type Application struct {
@@ -68,7 +69,14 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 		return nil, fmt.Errorf("maximum upload size must be positive")
 	}
 	uploadDirectory := filepath.Join(options.DataDirectory, "uploads")
-	if err := storage.MigrateSensitiveDataAtRest(context.Background(), database, options.EncryptionKeyring, uploadDirectory, filepath.Join(options.DataDirectory, "bulk-tax-documents"), options.FixtureDirectory); err != nil {
+	if err := storage.MigrateSensitiveDataAtRest(
+		context.Background(),
+		database,
+		options.EncryptionKeyring,
+		uploadDirectory,
+		filepath.Join(options.DataDirectory, "bulk-tax-documents"),
+		options.FixtureDirectory,
+	); err != nil {
 		return nil, err
 	}
 	renderer, err := templates.Load(options.TemplateDirectory)
@@ -89,7 +97,15 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 	cartHandler := cart.NewHandler(cartStore, accountStore, renderer, logger)
 	orderStore := orders.NewStore(database)
 	orderHandler := orders.NewHandler(orderStore, accountStore, renderer, logger)
-	checkoutHandler := checkout.NewHandler(cartStore, orderStore, accountStore, options.EncryptionKeyring, renderer, logger, options.AcornFulfillmentDelay)
+	checkoutHandler := checkout.NewHandler(
+		cartStore,
+		orderStore,
+		accountStore,
+		options.EncryptionKeyring,
+		renderer,
+		logger,
+		options.AcornFulfillmentDelay,
+	)
 	pawPalHandler := pawpal.NewHandler(orderStore, logger, options.PawPalAPIKey)
 	reviewHandler := reviews.NewHandler(reviews.NewStore(database), accountStore, renderer, logger)
 	productStore := storefront.NewStore(database)
@@ -100,10 +116,6 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 		logger,
 		unboundedPublicProductResults,
 	)
-	var downloadSigningKey [32]byte
-	if _, err := rand.Read(downloadSigningKey[:]); err != nil {
-		return nil, fmt.Errorf("generate download signing key: %w", err)
-	}
 	uploadHandler := uploads.NewHandler(
 		accountStore,
 		uploadStore,
@@ -112,11 +124,30 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 		options.EncryptionKeyring,
 		uploadDirectory,
 		defaultUploadBytes,
-		downloadSigningKey,
+		options.DownloadSigningKey,
 	)
-	adminHandler := admin.NewHandler(admin.NewStore(database), accountStore, renderer, logger, imagepreview.NewService(), options.MaxUploadBytes)
-	apiHandler := api.NewHandler(accountStore, orderStore, productStore, api.NewStore(database), logger, unboundedPublicProductResults)
-	assistantHandler := assistant.NewHandler(accountStore, assistant.NewService(orderStore), renderer, logger)
+	adminHandler := admin.NewHandler(
+		admin.NewStore(database),
+		accountStore,
+		renderer,
+		logger,
+		imagepreview.NewService(),
+		options.MaxUploadBytes,
+	)
+	apiHandler := api.NewHandler(
+		accountStore,
+		orderStore,
+		productStore,
+		api.NewStore(database),
+		logger,
+		unboundedPublicProductResults,
+	)
+	assistantHandler := assistant.NewHandler(
+		accountStore,
+		assistant.NewService(orderStore),
+		renderer,
+		logger,
+	)
 	supportHandler := support.NewHandler(
 		accountStore,
 		orderStore,
@@ -127,7 +158,14 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 		filepath.Join(options.DataDirectory, "bulk-tax-documents"),
 		defaultUploadBytes,
 	)
-	authenticationHandler := newAuthHandler(accountStore, mfaStore, passwordResetStore, renderer, logger, options.AppOrigin)
+	authenticationHandler := newAuthHandler(
+		accountStore,
+		mfaStore,
+		passwordResetStore,
+		renderer,
+		logger,
+		options.AppOrigin,
+	)
 	passkeyHandler, err := passkeys.NewHandler(
 		options.AppOrigin,
 		accountStore,
@@ -147,21 +185,73 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 	dynamicMux.HandleFunc("GET /api/account/orders", apiHandler.AccountOrders)
 	dynamicMux.HandleFunc("GET /api/orders/{id}", apiHandler.Order)
 	dynamicMux.HandleFunc("GET /api/products", apiHandler.Products)
+	dynamicMux.HandleFunc("OPTIONS /api/products", apiHandler.ProductsOptions)
 	dynamicMux.HandleFunc("GET /api/integrations/warehouse/orders", apiHandler.WarehouseOrders)
-	dynamicMux.Handle("POST /products/{id}/reviews", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(reviewHandler.Create)))
+	dynamicMux.Handle(
+		"POST /products/{id}/reviews",
+		parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(reviewHandler.Create)),
+	)
 	dynamicMux.HandleFunc("GET /login", authenticationHandler.LoginPage)
-	dynamicMux.Handle("POST /login", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(authenticationHandler.Login)))
+	dynamicMux.Handle(
+		"POST /login",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(authenticationHandler.Login),
+		),
+	)
 	dynamicMux.HandleFunc("GET /login/totp", authenticationHandler.TOTPLoginPage)
-	dynamicMux.Handle("POST /login/totp", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(authenticationHandler.TOTPLogin)))
+	dynamicMux.Handle(
+		"POST /login/totp",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(authenticationHandler.TOTPLogin),
+		),
+	)
 	dynamicMux.HandleFunc("POST /login/totp/cancel", authenticationHandler.CancelTOTPLogin)
 	dynamicMux.HandleFunc("GET /signup", authenticationHandler.SignupPage)
-	dynamicMux.Handle("POST /signup", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(authenticationHandler.Signup)))
+	dynamicMux.Handle(
+		"POST /signup",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(authenticationHandler.Signup),
+		),
+	)
 	dynamicMux.HandleFunc("GET /recover-mfa", authenticationHandler.MFARecoveryPage)
-	dynamicMux.Handle("POST /recover-mfa", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(authenticationHandler.RecoverMFA)))
+	dynamicMux.Handle(
+		"POST /recover-mfa",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(authenticationHandler.RecoverMFA),
+		),
+	)
 	dynamicMux.HandleFunc("GET /password-reset", authenticationHandler.PasswordResetRequestPage)
-	dynamicMux.Handle("POST /password-reset", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(authenticationHandler.RequestPasswordReset)))
+	dynamicMux.Handle(
+		"POST /password-reset",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(authenticationHandler.RequestPasswordReset),
+		),
+	)
 	dynamicMux.HandleFunc("GET /password-reset/{token}", authenticationHandler.PasswordResetPage)
-	dynamicMux.Handle("POST /password-reset/{token}", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(authenticationHandler.ResetPassword)))
+	dynamicMux.Handle(
+		"POST /password-reset/{token}",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(authenticationHandler.ResetPassword),
+		),
+	)
 	dynamicMux.HandleFunc("POST /logout", authenticationHandler.Logout)
 	dynamicMux.HandleFunc("GET /auth/passkey", passkeyHandler.LoginPage)
 	dynamicMux.HandleFunc("POST /auth/passkey/begin", passkeyHandler.BeginLogin)
@@ -172,54 +262,141 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 	dynamicMux.HandleFunc("POST /account/passkey/verify", passkeyHandler.CompleteRegistration)
 	dynamicMux.HandleFunc("POST /account/passkey/{id}/delete", passkeyHandler.DeleteCredential)
 	dynamicMux.HandleFunc("GET /account/assistant", assistantHandler.Page)
-	dynamicMux.Handle("POST /account/assistant", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(assistantHandler.Ask)))
-	dynamicMux.Handle("POST /account/email", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(accountHandler.UpdateEmail)))
+	dynamicMux.Handle(
+		"POST /account/assistant",
+		parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(assistantHandler.Ask)),
+	)
+	dynamicMux.Handle(
+		"POST /account/email",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(accountHandler.UpdateEmail),
+		),
+	)
 	dynamicMux.HandleFunc("GET /account/totp", accountHandler.TOTPPage)
-	dynamicMux.Handle("POST /account/totp/confirm", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(accountHandler.ConfirmTOTP)))
-	dynamicMux.Handle("POST /account/totp/disable", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(accountHandler.DisableTOTP)))
+	dynamicMux.Handle(
+		"POST /account/totp/confirm",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(accountHandler.ConfirmTOTP),
+		),
+	)
+	dynamicMux.Handle(
+		"POST /account/totp/disable",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(accountHandler.DisableTOTP),
+		),
+	)
 	dynamicMux.HandleFunc("GET /account/tax-exemption", uploadHandler.TaxExemptionPage)
 	dynamicMux.HandleFunc("POST /account/tax-exemption/files", uploadHandler.Upload)
 	dynamicMux.HandleFunc("GET /account/reviews", reviewHandler.List)
 	dynamicMux.HandleFunc("GET /account/reviews/{id}/edit", reviewHandler.Edit)
-	dynamicMux.Handle("POST /account/reviews/{id}", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(reviewHandler.Update)))
-	dynamicMux.Handle("POST /account/reviews/{id}/delete", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(reviewHandler.Delete)))
+	dynamicMux.Handle(
+		"POST /account/reviews/{id}",
+		parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(reviewHandler.Update)),
+	)
+	dynamicMux.Handle(
+		"POST /account/reviews/{id}/delete",
+		parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(reviewHandler.Delete)),
+	)
 	dynamicMux.HandleFunc("GET /cart", cartHandler.Page)
-	dynamicMux.Handle("POST /cart/items", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(cartHandler.AddItem)))
-	dynamicMux.Handle("POST /cart/items/{productId}", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(cartHandler.UpdateItem)))
+	dynamicMux.Handle(
+		"POST /cart/items",
+		parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(cartHandler.AddItem)),
+	)
+	dynamicMux.Handle(
+		"POST /cart/items/{productId}",
+		parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(cartHandler.UpdateItem)),
+	)
 	dynamicMux.HandleFunc("GET /checkout", checkoutHandler.Page)
-	dynamicMux.Handle("POST /checkout", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(checkoutHandler.Submit)))
+	dynamicMux.Handle(
+		"POST /checkout",
+		parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(checkoutHandler.Submit)),
+	)
 	dynamicMux.HandleFunc("GET /pawpal/processing/{orderId}", checkoutHandler.Processing)
 	dynamicMux.HandleFunc("GET /account/orders", orderHandler.List)
 	dynamicMux.HandleFunc("GET /orders/{id}", orderHandler.Detail)
 	dynamicMux.HandleFunc("GET /files/{id}/download", uploadHandler.Download)
 	dynamicMux.HandleFunc("GET /files/{id}/signed-download", uploadHandler.SignedDownload)
-	dynamicMux.HandleFunc("GET /support/files/imports/{id}/download", uploadHandler.ImportedDownload)
+	dynamicMux.HandleFunc(
+		"GET /support/files/imports/{id}/download",
+		uploadHandler.ImportedDownload,
+	)
 	dynamicMux.HandleFunc("GET /support", supportHandler.Dashboard)
 	dynamicMux.HandleFunc("GET /support/orders", supportHandler.ListOrders)
 	dynamicMux.HandleFunc("GET /support/orders/{id}", supportHandler.Order)
 	dynamicMux.HandleFunc("GET /support/tax-exemptions", supportHandler.TaxExemptions)
-	dynamicMux.HandleFunc("GET /support/tax-exemptions/import", supportHandler.ImportTaxDocumentsPage)
+	dynamicMux.HandleFunc(
+		"GET /support/tax-exemptions/import",
+		supportHandler.ImportTaxDocumentsPage,
+	)
 	dynamicMux.HandleFunc("POST /support/tax-exemptions/import", supportHandler.ImportTaxDocuments)
 	dynamicMux.HandleFunc("GET /admin", adminHandler.Dashboard)
 	dynamicMux.HandleFunc("GET /admin/image-preview", adminHandler.ImagePreviewPage)
-	dynamicMux.Handle("POST /admin/image-preview", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(adminHandler.PreviewImage)))
+	dynamicMux.Handle(
+		"POST /admin/image-preview",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(adminHandler.PreviewImage),
+		),
+	)
 	dynamicMux.HandleFunc("GET /admin/products", adminHandler.ListProducts)
 	dynamicMux.HandleFunc("GET /admin/products/new", adminHandler.NewProduct)
-	dynamicMux.Handle("POST /admin/products", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(adminHandler.CreateProduct)))
+	dynamicMux.Handle(
+		"POST /admin/products",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(adminHandler.CreateProduct),
+		),
+	)
 	dynamicMux.HandleFunc("GET /admin/products/{id}/edit", adminHandler.EditProduct)
-	dynamicMux.Handle("POST /admin/products/{id}", parseForm(options.MaxRequestBodyBytes, renderer)(http.HandlerFunc(adminHandler.UpdateProduct)))
+	dynamicMux.Handle(
+		"POST /admin/products/{id}",
+		parseForm(
+			options.MaxRequestBodyBytes,
+			renderer,
+		)(
+			http.HandlerFunc(adminHandler.UpdateProduct),
+		),
+	)
 	dynamicMux.HandleFunc("GET /admin/products/{id}", adminHandler.Product)
 	dynamicMux.HandleFunc("/", func(responseWriter http.ResponseWriter, _ *http.Request) {
-		if err := httpx.RespondWithErrorPage(responseWriter, renderer, http.StatusNotFound, "Page Not Found", "We couldn't find the page you requested."); err != nil {
-			http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		if err := httpx.RespondWithErrorPage(
+			responseWriter,
+			renderer,
+			http.StatusNotFound,
+			"Page Not Found",
+			"We couldn't find the page you requested.",
+		); err != nil {
+			http.Error(
+				responseWriter,
+				http.StatusText(http.StatusInternalServerError),
+				http.StatusInternalServerError,
+			)
 		}
 	})
 
-	dynamicHandler := permissiveCORS(dynamicMux)
+	// dynamicHandler := permissiveCORS(dynamicMux)
+	// dynamicHandler := dynamicMux
 
 	mainMux := http.NewServeMux()
 	mainMux.HandleFunc("GET /health", func(responseWriter http.ResponseWriter, _ *http.Request) {
-		httpx.RespondWithJSON(responseWriter, http.StatusOK, map[string]any{"ok": true, "app": "bearly-secure"})
+		httpx.RespondWithJSON(
+			responseWriter,
+			http.StatusOK,
+			map[string]any{"ok": true, "app": "bearly-secure"},
+		)
 	})
 	staticHandler := newStaticHandler(publicRoot)
 	mainMux.Handle("GET /reset.css", staticHandler)
@@ -231,11 +408,13 @@ func New(database *sql.DB, logger *logging.Logger, options Options) (*Applicatio
 	mainMux.Handle("GET /shipping-widget.js", staticHandler)
 	mainMux.Handle("GET /product-photos/{filename}", staticHandler)
 	mainMux.HandleFunc("POST /integrations/pawpal/webhook", pawPalHandler.Webhook)
+
+	dynamicHandler := applyMiddleware(dynamicMux, originProtect(options.AppOrigin, renderer))
 	mainMux.Handle("/", dynamicHandler)
 
 	handler := applyMiddleware(
 		mainMux,
-		cspNonce,
+		securityHeaders,
 		recoverPanics(logger, renderer),
 	)
 	return &Application{Handler: handler, publicRoot: publicRoot}, nil
@@ -253,6 +432,10 @@ func newStaticHandler(publicRoot *os.Root) http.Handler {
 		if err != nil || fileInfo.IsDir() {
 			http.NotFound(responseWriter, request)
 			return
+		}
+		if strings.HasSuffix(request.URL.Path, "shipping-widget.js") ||
+			strings.HasSuffix(request.URL.Path, "shipping-widget.css") {
+			responseWriter.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 		}
 		fileServer.ServeHTTP(responseWriter, request)
 	})

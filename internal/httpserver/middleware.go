@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,34 +30,89 @@ func applyMiddleware(handler http.Handler, middlewareChain ...middleware) http.H
 	return handler
 }
 
-func permissiveCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
-		if origin := request.Header.Get("Origin"); origin != "" {
-			responseWriter.Header().Set("Access-Control-Allow-Origin", origin)
-			responseWriter.Header().Set("Access-Control-Allow-Credentials", "true")
-			responseWriter.Header().Set("Vary", "Origin")
-		}
-		if request.Method == http.MethodOptions {
-			responseWriter.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			responseWriter.Header().Set("Access-Control-Allow-Headers", request.Header.Get("Access-Control-Request-Headers"))
-			responseWriter.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(responseWriter, request)
-	})
-}
-
-func cspNonce(next http.Handler) http.Handler {
+func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
 		nonceBytes := make([]byte, 16)
 		if _, err := rand.Read(nonceBytes); err != nil {
-			http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			http.Error(
+				responseWriter,
+				http.StatusText(http.StatusInternalServerError),
+				http.StatusInternalServerError,
+			)
 			return
 		}
 		nonce := base64.StdEncoding.EncodeToString(nonceBytes)
 		request = request.WithContext(httpx.WithCSPNonce(request.Context(), nonce))
+
+		responseWriter.Header().Set("X-Content-Type-Options", "nosniff")
+
+		responseWriter.Header().
+			Set("Content-Security-Policy", strings.Join([]string{
+				"default-src 'self'",
+				fmt.Sprintf("script-src 'self' 'nonce-%s'", httpx.CSPNonce(request.Context())),
+				"style-src 'self'",
+				"img-src 'self' data:",
+				"frame-src 'self'",
+				"object-src 'none'",
+				"base-uri 'self'",
+				"form-action 'self'",
+				"frame-ancestors 'self'",
+			}, "; "))
+		responseWriter.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		responseWriter.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		responseWriter.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		responseWriter.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		responseWriter.Header().Set("Origin-Agent-Cluster", "?1")
+		responseWriter.Header().Set("X-DNS-Prefetch-Control", "off")
+		responseWriter.Header().Set("X-Download-Options", "noopen")
+		responseWriter.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
+		responseWriter.Header().Set("X-XSS-Protection", "0")
 		next.ServeHTTP(responseWriter, request)
 	})
+}
+
+func originProtect(origin string, renderer *templates.Renderer) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+			if request.Method != "POST" {
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+			headersOrigin := request.Header.Get("Origin")
+			if headersOrigin == origin {
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+			if headersOrigin == "" {
+				if refererOrigin(request.Header.Get("Referer")) == origin {
+					next.ServeHTTP(responseWriter, request)
+					return
+				}
+			}
+			if err := httpx.RespondWithErrorPage(
+				responseWriter,
+				renderer,
+				http.StatusForbidden,
+				"Untrusted Origin",
+				"Sorry your request is malformed or untrusted, bye",
+			); err != nil {
+				http.Error(
+					responseWriter,
+					http.StatusText(http.StatusInternalServerError),
+					http.StatusInternalServerError,
+				)
+			}
+		})
+	}
+}
+
+func refererOrigin(referer string) string {
+	parsed, err := url.Parse(referer)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 func recoverPanics(logger *logging.Logger, renderer *templates.Renderer) middleware {
@@ -69,8 +125,18 @@ func recoverPanics(logger *logging.Logger, renderer *templates.Renderer) middlew
 						"path":    request.URL.Path,
 						"message": fmt.Sprint(recovered),
 					})
-					if err := httpx.RespondWithErrorPage(responseWriter, renderer, http.StatusInternalServerError, "Unhandled Error", fmt.Sprint(recovered)); err != nil {
-						http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					if err := httpx.RespondWithErrorPage(
+						responseWriter,
+						renderer,
+						http.StatusInternalServerError,
+						"Unhandled Error",
+						fmt.Sprint(recovered),
+					); err != nil {
+						http.Error(
+							responseWriter,
+							http.StatusText(http.StatusInternalServerError),
+							http.StatusInternalServerError,
+						)
 					}
 				}
 			}()
@@ -186,14 +252,22 @@ func (limiter *fixedWindowLimiter) sweepExpiredCounters(now time.Time) {
 	limiter.nextSweepAt = now.Add(limiter.options.window)
 }
 
-func (limiter *fixedWindowLimiter) reject(responseWriter http.ResponseWriter, request *http.Request, state rateLimitState) {
+func (limiter *fixedWindowLimiter) reject(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	state rateLimitState,
+) {
 	setRateLimitHeaders(responseWriter, state)
 	responseWriter.Header().Set("Retry-After", strconv.Itoa(state.retryAfterSeconds))
 	if limiter.options.onLimit != nil {
 		limiter.options.onLimit(responseWriter, request, state)
 		return
 	}
-	httpx.RespondWithJSON(responseWriter, http.StatusTooManyRequests, map[string]string{"error": "Too many requests"})
+	httpx.RespondWithJSON(
+		responseWriter,
+		http.StatusTooManyRequests,
+		map[string]string{"error": "Too many requests"},
+	)
 }
 
 func fixedWindowRateLimiter(options rateLimitOptions) middleware {
@@ -206,7 +280,8 @@ func fixedWindowRateLimiter(options rateLimitOptions) middleware {
 func setRateLimitHeaders(responseWriter http.ResponseWriter, state rateLimitState) {
 	responseWriter.Header().Set("RateLimit-Limit", strconv.Itoa(state.limit))
 	responseWriter.Header().Set("RateLimit-Remaining", strconv.Itoa(state.remaining))
-	responseWriter.Header().Set("RateLimit-Reset", strconv.FormatInt(state.resetAt.Unix()+boolToInt64(state.resetAt.Nanosecond() > 0), 10))
+	responseWriter.Header().
+		Set("RateLimit-Reset", strconv.FormatInt(state.resetAt.Unix()+boolToInt64(state.resetAt.Nanosecond() > 0), 10))
 }
 
 func clientIPKey(request *http.Request) string {
@@ -226,7 +301,9 @@ func clientIPKeyWithTrustedProxies(trustedProxyHops int) func(*http.Request) str
 			forwardedAddresses := strings.Split(request.Header.Get("X-Forwarded-For"), ",")
 			selectedIndex := len(forwardedAddresses) - trustedProxyHops
 			if selectedIndex >= 0 && selectedIndex < len(forwardedAddresses) {
-				if selectedAddress := strings.TrimSpace(forwardedAddresses[selectedIndex]); selectedAddress != "" {
+				if selectedAddress := strings.TrimSpace(
+					forwardedAddresses[selectedIndex],
+				); selectedAddress != "" {
 					return selectedAddress
 				}
 			}

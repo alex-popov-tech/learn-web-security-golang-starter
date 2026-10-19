@@ -32,8 +32,18 @@ type Handler struct {
 	logger       *logging.Logger
 }
 
-func NewHandler(orderStore *Store, accountStore *accounts.Store, renderer *templates.Renderer, logger *logging.Logger) *Handler {
-	return &Handler{orderStore: orderStore, accountStore: accountStore, renderer: renderer, logger: logger}
+func NewHandler(
+	orderStore *Store,
+	accountStore *accounts.Store,
+	renderer *templates.Renderer,
+	logger *logging.Logger,
+) *Handler {
+	return &Handler{
+		orderStore:   orderStore,
+		accountStore: accountStore,
+		renderer:     renderer,
+		logger:       logger,
+	}
 }
 
 func (handler *Handler) List(responseWriter http.ResponseWriter, request *http.Request) {
@@ -76,6 +86,10 @@ func (handler *Handler) Detail(responseWriter http.ResponseWriter, request *http
 		handler.orderNotFound(responseWriter)
 		return
 	}
+	if order.UserID != current.User.ID {
+		handler.orderNotFound(responseWriter)
+		return
+	}
 	orderItems, err := handler.orderStore.ListItems(request.Context(), order.ID)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -92,7 +106,10 @@ func (handler *Handler) Detail(responseWriter http.ResponseWriter, request *http
 	}
 }
 
-func (handler *Handler) requireAuth(responseWriter http.ResponseWriter, request *http.Request) (accounts.CurrentSession, bool) {
+func (handler *Handler) requireAuth(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) (accounts.CurrentSession, bool) {
 	current, found, err := sessions.Require(responseWriter, request, handler.accountStore)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -102,16 +119,47 @@ func (handler *Handler) requireAuth(responseWriter http.ResponseWriter, request 
 }
 
 func (handler *Handler) orderNotFound(responseWriter http.ResponseWriter) {
-	handler.errorPage(responseWriter, http.StatusNotFound, "Order Not Found", "We couldn't find that order.")
+	handler.errorPage(
+		responseWriter,
+		http.StatusNotFound,
+		"Order Not Found",
+		"We couldn't find that order.",
+	)
 }
 
-func (handler *Handler) errorPage(responseWriter http.ResponseWriter, statusCode int, heading, message string) {
-	if err := httpx.RespondWithErrorPage(responseWriter, handler.renderer, statusCode, heading, message); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+func (handler *Handler) errorPage(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	heading, message string,
+) {
+	if err := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		statusCode,
+		heading,
+		message,
+	); err != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *Handler) internalError(responseWriter http.ResponseWriter, request *http.Request, err error) {
-	_ = handler.logger.Event("unhandled_error", map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()})
-	handler.errorPage(responseWriter, http.StatusInternalServerError, "Unhandled Error", err.Error())
+func (handler *Handler) internalError(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
+	_ = handler.logger.Event(
+		"unhandled_error",
+		map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()},
+	)
+	handler.errorPage(
+		responseWriter,
+		http.StatusInternalServerError,
+		"Unhandled Error",
+		err.Error(),
+	)
 }

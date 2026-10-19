@@ -11,7 +11,9 @@ import (
 	"github.com/bootdotdev/learn-web-security/internal/storage"
 )
 
-var ErrInsufficientInventory = errors.New("one or more cart items are no longer available in the requested quantity")
+var ErrInsufficientInventory = errors.New(
+	"one or more cart items are no longer available in the requested quantity",
+)
 
 const InsufficientInventoryMessage = "One or more cart items are no longer available in the requested quantity."
 
@@ -45,7 +47,14 @@ func NewStore(database *sql.DB) *Store {
 	return &Store{database: database, queries: dbgen.New(database)}
 }
 
-func (store *Store) CreateFromCart(ctx context.Context, userID int64, cartItems []cart.Item, discountCents int64, shippingDetails ShippingDetails, adminNotes string, keyring *storage.Keyring) (Order, error) {
+func (store *Store) CreateFromCart(
+	ctx context.Context,
+	userID int64,
+	cartItems []cart.Item,
+	shippingDetails ShippingDetails,
+	adminNotes string,
+	keyring *storage.Keyring,
+) (Order, error) {
 	encryptedShippingDetails, err := EncryptShippingDetails(shippingDetails, keyring)
 	if err != nil {
 		return Order{}, err
@@ -54,7 +63,6 @@ func (store *Store) CreateFromCart(ctx context.Context, userID int64, cartItems 
 	for _, cartItem := range cartItems {
 		totalCents += cartItem.LineTotalCents
 	}
-	totalCents -= discountCents
 	transaction, err := store.database.BeginTx(ctx, nil)
 	if err != nil {
 		return Order{}, fmt.Errorf("begin order transaction: %w", err)

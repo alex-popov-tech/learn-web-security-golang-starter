@@ -61,14 +61,22 @@ func run(ctx context.Context) error {
 		FixtureDirectory:        filepath.Join(workingDirectory, "data", "fixtures"),
 		TemplateDirectory:       filepath.Join(workingDirectory, "web", "templates"),
 		PublicDirectory:         filepath.Join(workingDirectory, "web", "public"),
+		DownloadSigningKey:      appConfig.DownloadSigningKey,
 	})
 	if err != nil {
 		return err
 	}
 	defer application.Close()
-	applicationServer := httpserver.NewServer(fmt.Sprintf(":%d", appConfig.Port), application.Handler)
+	applicationServer := httpserver.NewServer(
+		fmt.Sprintf(":%d", appConfig.Port),
+		application.Handler,
+	)
 	serverErrors := make(chan error, 1)
-	serve(applicationServer, fmt.Sprintf("Bearly Secure is running at http://localhost:%d", appConfig.Port), serverErrors)
+	serve(
+		applicationServer,
+		fmt.Sprintf("Bearly Secure is running at http://localhost:%d", appConfig.Port),
+		serverErrors,
+	)
 
 	select {
 	case <-ctx.Done():

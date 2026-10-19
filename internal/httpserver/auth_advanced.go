@@ -43,7 +43,10 @@ type passwordResetPage struct {
 	Email string
 }
 
-func (handler *authHandler) TOTPLoginPage(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *authHandler) TOTPLoginPage(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	challengeToken := totpLoginChallengeToken(request)
 	if challengeToken == "" {
 		clearTOTPLoginChallengeCookie(responseWriter)
@@ -74,7 +77,12 @@ func (handler *authHandler) TOTPLoginPage(responseWriter http.ResponseWriter, re
 		http.Redirect(responseWriter, request, verificationRestartLoginPath("/"), http.StatusFound)
 		return
 	}
-	if err := handler.renderTOTPLogin(responseWriter, http.StatusOK, challenge.ReturnTo, ""); err != nil {
+	if err := handler.renderTOTPLogin(
+		responseWriter,
+		http.StatusOK,
+		challenge.ReturnTo,
+		"",
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
@@ -94,7 +102,12 @@ func (handler *authHandler) TOTPLogin(responseWriter http.ResponseWriter, reques
 	}
 	if challengeToken == "" || !found {
 		clearTOTPLoginChallengeCookie(responseWriter)
-		http.Redirect(responseWriter, request, verificationRestartLoginPath(requestedReturnTo), http.StatusFound)
+		http.Redirect(
+			responseWriter,
+			request,
+			verificationRestartLoginPath(requestedReturnTo),
+			http.StatusFound,
+		)
 		return
 	}
 	user, userFound, err := handler.accounts.FindUserByID(request.Context(), challenge.UserID)
@@ -113,7 +126,12 @@ func (handler *authHandler) TOTPLogin(responseWriter http.ResponseWriter, reques
 			return
 		}
 		clearTOTPLoginChallengeCookie(responseWriter)
-		http.Redirect(responseWriter, request, verificationRestartLoginPath(challenge.ReturnTo), http.StatusFound)
+		http.Redirect(
+			responseWriter,
+			request,
+			verificationRestartLoginPath(challenge.ReturnTo),
+			http.StatusFound,
+		)
 		return
 	}
 	mfaCode, err := httpx.FormValue(request, "mfaCode")
@@ -121,7 +139,12 @@ func (handler *authHandler) TOTPLogin(responseWriter http.ResponseWriter, reques
 		handler.invalidForm(responseWriter)
 		return
 	}
-	verified, err := handler.mfa.VerifyAndConsume(request.Context(), user.ID, strings.TrimSpace(mfaCode), secret)
+	verified, err := handler.mfa.VerifyAndConsume(
+		request.Context(),
+		user.ID,
+		strings.TrimSpace(mfaCode),
+		secret,
+	)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
@@ -141,10 +164,20 @@ func (handler *authHandler) TOTPLogin(responseWriter http.ResponseWriter, reques
 		})
 		if exhausted {
 			clearTOTPLoginChallengeCookie(responseWriter)
-			http.Redirect(responseWriter, request, verificationRestartLoginPath(challenge.ReturnTo), http.StatusFound)
+			http.Redirect(
+				responseWriter,
+				request,
+				verificationRestartLoginPath(challenge.ReturnTo),
+				http.StatusFound,
+			)
 			return
 		}
-		if err := handler.renderTOTPLogin(responseWriter, http.StatusUnauthorized, challenge.ReturnTo, "Authenticator code is incorrect."); err != nil {
+		if err := handler.renderTOTPLogin(
+			responseWriter,
+			http.StatusUnauthorized,
+			challenge.ReturnTo,
+			"Authenticator code is incorrect.",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -171,8 +204,14 @@ func (handler *authHandler) TOTPLogin(responseWriter http.ResponseWriter, reques
 	http.Redirect(responseWriter, request, challenge.ReturnTo, http.StatusFound)
 }
 
-func (handler *authHandler) CancelTOTPLogin(responseWriter http.ResponseWriter, request *http.Request) {
-	if err := handler.mfa.DeleteChallenge(request.Context(), totpLoginChallengeToken(request)); err != nil {
+func (handler *authHandler) CancelTOTPLogin(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
+	if err := handler.mfa.DeleteChallenge(
+		request.Context(),
+		totpLoginChallengeToken(request),
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
@@ -182,7 +221,11 @@ func (handler *authHandler) CancelTOTPLogin(responseWriter http.ResponseWriter, 
 
 func (handler *authHandler) MFARecoveryPage(responseWriter http.ResponseWriter, _ *http.Request) {
 	if err := handler.renderMFARecovery(responseWriter, http.StatusOK, ""); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
@@ -207,20 +250,38 @@ func (handler *authHandler) RecoverMFA(responseWriter http.ResponseWriter, reque
 		return
 	}
 	if recentFailures >= 5 {
-		handler.logMFARecovery(email, nullableUserID(user, found), false, "too many recovery attempts")
-		if err := handler.renderMFARecovery(responseWriter, http.StatusTooManyRequests, "Too many recovery attempts. Try again later."); err != nil {
+		handler.logMFARecovery(
+			email,
+			nullableUserID(user, found),
+			false,
+			"too many recovery attempts",
+		)
+		if err := handler.renderMFARecovery(
+			responseWriter,
+			http.StatusTooManyRequests,
+			"Too many recovery attempts. Try again later.",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
 	}
 	if !found || !passwords.Verify(password, user.PasswordHash) {
 		userID := nullableInt64(user.ID, found)
-		if err := handler.mfa.RecordRecoveryAttempt(request.Context(), email, userID, false); err != nil {
+		if err := handler.mfa.RecordRecoveryAttempt(
+			request.Context(),
+			email,
+			userID,
+			false,
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 			return
 		}
 		handler.logMFARecovery(email, nullableUserID(user, found), false, loginFailureReason(found))
-		if err := handler.renderMFARecovery(responseWriter, http.StatusUnauthorized, "Invalid recovery details."); err != nil {
+		if err := handler.renderMFARecovery(
+			responseWriter,
+			http.StatusUnauthorized,
+			"Invalid recovery details.",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -231,12 +292,21 @@ func (handler *authHandler) RecoverMFA(responseWriter http.ResponseWriter, reque
 		return
 	}
 	if !consumed {
-		if err := handler.mfa.RecordRecoveryAttempt(request.Context(), email, &user.ID, false); err != nil {
+		if err := handler.mfa.RecordRecoveryAttempt(
+			request.Context(),
+			email,
+			&user.ID,
+			false,
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 			return
 		}
 		handler.logMFARecovery(user.Email, user.ID, false, "backup code rejected")
-		if err := handler.renderMFARecovery(responseWriter, http.StatusUnauthorized, "Invalid recovery details."); err != nil {
+		if err := handler.renderMFARecovery(
+			responseWriter,
+			http.StatusUnauthorized,
+			"Invalid recovery details.",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -255,7 +325,12 @@ func (handler *authHandler) RecoverMFA(responseWriter http.ResponseWriter, reque
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	if err := handler.mfa.RecordRecoveryAttempt(request.Context(), user.Email, &user.ID, true); err != nil {
+	if err := handler.mfa.RecordRecoveryAttempt(
+		request.Context(),
+		user.Email,
+		&user.ID,
+		true,
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
@@ -267,13 +342,29 @@ func (handler *authHandler) RecoverMFA(responseWriter http.ResponseWriter, reque
 	http.Redirect(responseWriter, request, "/account/totp", http.StatusFound)
 }
 
-func (handler *authHandler) PasswordResetRequestPage(responseWriter http.ResponseWriter, _ *http.Request) {
-	if err := handler.renderPasswordResetRequest(responseWriter, http.StatusOK, false, "", ""); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+func (handler *authHandler) PasswordResetRequestPage(
+	responseWriter http.ResponseWriter,
+	_ *http.Request,
+) {
+	if err := handler.renderPasswordResetRequest(
+		responseWriter,
+		http.StatusOK,
+		false,
+		"",
+		"",
+	); err != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *authHandler) RequestPasswordReset(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *authHandler) RequestPasswordReset(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	email, err := httpx.FormValue(request, "email")
 	if err != nil {
 		handler.invalidForm(responseWriter)
@@ -291,7 +382,13 @@ func (handler *authHandler) RequestPasswordReset(responseWriter http.ResponseWri
 			"success":       false,
 			"failureReason": "email not found",
 		})
-		if err := handler.renderPasswordResetRequest(responseWriter, http.StatusNotFound, false, "No account exists for that email.", ""); err != nil {
+		if err := handler.renderPasswordResetRequest(
+			responseWriter,
+			http.StatusOK,
+			false,
+			"If an account exists for that email, Bear Mail will send a reset link shortly.",
+			"",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -313,12 +410,21 @@ func (handler *authHandler) RequestPasswordReset(responseWriter http.ResponseWri
 		"resetToken": resetToken.Value,
 		"resetLink":  resetLink,
 	})
-	if err := handler.renderPasswordResetRequest(responseWriter, http.StatusOK, true, "", "/password-reset/"+resetToken.Value); err != nil {
+	if err := handler.renderPasswordResetRequest(
+		responseWriter,
+		http.StatusOK,
+		true,
+		"",
+		"",
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
-func (handler *authHandler) PasswordResetPage(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *authHandler) PasswordResetPage(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	token := request.PathValue("token")
 	_, found, err := handler.passwordResets.Validate(request.Context(), token)
 	if err != nil {
@@ -326,17 +432,32 @@ func (handler *authHandler) PasswordResetPage(responseWriter http.ResponseWriter
 		return
 	}
 	if !found {
-		if err := handler.renderPasswordReset(responseWriter, http.StatusNotFound, token, "Reset link not found or expired", ""); err != nil {
+		if err := handler.renderPasswordReset(
+			responseWriter,
+			http.StatusNotFound,
+			token,
+			"Reset link not found or expired",
+			"",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
 	}
-	if err := handler.renderPasswordReset(responseWriter, http.StatusOK, token, "", ""); err != nil {
+	if err := handler.renderPasswordReset(
+		responseWriter,
+		http.StatusOK,
+		token,
+		"",
+		"",
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
-func (handler *authHandler) ResetPassword(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *authHandler) ResetPassword(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	token := request.PathValue("token")
 	resetToken, found, err := handler.passwordResets.Validate(request.Context(), token)
 	if err != nil {
@@ -344,7 +465,13 @@ func (handler *authHandler) ResetPassword(responseWriter http.ResponseWriter, re
 		return
 	}
 	if !found {
-		if err := handler.renderPasswordReset(responseWriter, http.StatusNotFound, token, "Reset link not found or expired", ""); err != nil {
+		if err := handler.renderPasswordReset(
+			responseWriter,
+			http.StatusNotFound,
+			token,
+			"Reset link not found or expired",
+			"",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -355,7 +482,13 @@ func (handler *authHandler) ResetPassword(responseWriter http.ResponseWriter, re
 		return
 	}
 	if !userFound {
-		if err := handler.renderPasswordReset(responseWriter, http.StatusNotFound, token, "Account not found", ""); err != nil {
+		if err := handler.renderPasswordReset(
+			responseWriter,
+			http.StatusNotFound,
+			token,
+			"Account not found",
+			"",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -367,13 +500,25 @@ func (handler *authHandler) ResetPassword(responseWriter http.ResponseWriter, re
 	}
 	passwordLength := utf8.RuneCountInString(password)
 	if passwordLength < minimumPasswordLength {
-		if err := handler.renderPasswordReset(responseWriter, http.StatusBadRequest, token, "Password must be at least 8 characters", ""); err != nil {
+		if err := handler.renderPasswordReset(
+			responseWriter,
+			http.StatusBadRequest,
+			token,
+			"Password must be at least 8 characters",
+			"",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
 	}
 	if passwordLength > passwords.MaxLength {
-		if err := handler.renderPasswordReset(responseWriter, http.StatusBadRequest, token, "Password must not exceed 128 characters", ""); err != nil {
+		if err := handler.renderPasswordReset(
+			responseWriter,
+			http.StatusBadRequest,
+			token,
+			"Password must not exceed 128 characters",
+			"",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
@@ -389,33 +534,75 @@ func (handler *authHandler) ResetPassword(responseWriter http.ResponseWriter, re
 		return
 	}
 	if !reset {
-		if err := handler.renderPasswordReset(responseWriter, http.StatusNotFound, token, "Reset link not found or expired", ""); err != nil {
+		if err := handler.renderPasswordReset(
+			responseWriter,
+			http.StatusNotFound,
+			token,
+			"Reset link not found or expired",
+			"",
+		); err != nil {
 			handler.internalError(responseWriter, request, err)
 		}
 		return
 	}
-	if err := handler.renderPasswordReset(responseWriter, http.StatusOK, "", "", user.Email); err != nil {
+	if err := handler.renderPasswordReset(
+		responseWriter,
+		http.StatusOK,
+		"",
+		"",
+		user.Email,
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
-func (handler *authHandler) renderTOTPLogin(responseWriter http.ResponseWriter, statusCode int, returnTo, errorMessage string) error {
+func (handler *authHandler) renderTOTPLogin(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	returnTo, errorMessage string,
+) error {
 	return handler.renderer.Render(responseWriter, statusCode, "totp-login", totpLoginPage{
 		Title: "Two-Step Verification", Error: errorMessage, ReturnTo: safeReturnTo(returnTo),
 	})
 }
 
-func (handler *authHandler) renderMFARecovery(responseWriter http.ResponseWriter, statusCode int, errorMessage string) error {
-	return handler.renderer.Render(responseWriter, statusCode, "mfa-recovery", recoveryPage{Title: "Use a Backup Code", Error: errorMessage})
+func (handler *authHandler) renderMFARecovery(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	errorMessage string,
+) error {
+	return handler.renderer.Render(
+		responseWriter,
+		statusCode,
+		"mfa-recovery",
+		recoveryPage{Title: "Use a Backup Code", Error: errorMessage},
+	)
 }
 
-func (handler *authHandler) renderPasswordResetRequest(responseWriter http.ResponseWriter, statusCode int, showConfirmation bool, errorMessage, resetLink string) error {
-	return handler.renderer.Render(responseWriter, statusCode, "password-reset-request", passwordResetRequestPage{
-		Title: "Reset Password", Error: errorMessage, ShowConfirmation: showConfirmation, ResetLink: resetLink,
-	})
+func (handler *authHandler) renderPasswordResetRequest(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	showConfirmation bool,
+	errorMessage, resetLink string,
+) error {
+	return handler.renderer.Render(
+		responseWriter,
+		statusCode,
+		"password-reset-request",
+		passwordResetRequestPage{
+			Title:            "Reset Password",
+			Error:            errorMessage,
+			ShowConfirmation: showConfirmation,
+			ResetLink:        resetLink,
+		},
+	)
 }
 
-func (handler *authHandler) renderPasswordReset(responseWriter http.ResponseWriter, statusCode int, token, errorMessage, email string) error {
+func (handler *authHandler) renderPasswordReset(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	token, errorMessage, email string,
+) error {
 	templateName := "password-reset"
 	title := "Choose New Password"
 	if email != "" {
@@ -427,7 +614,12 @@ func (handler *authHandler) renderPasswordReset(responseWriter http.ResponseWrit
 	})
 }
 
-func (handler *authHandler) logMFARecovery(email string, userID any, succeeded bool, failureReason string) {
+func (handler *authHandler) logMFARecovery(
+	email string,
+	userID any,
+	succeeded bool,
+	failureReason string,
+) {
 	fields := map[string]any{"email": email, "userId": userID, "success": succeeded}
 	if failureReason != "" {
 		fields["failureReason"] = failureReason
@@ -445,8 +637,13 @@ func totpLoginChallengeToken(request *http.Request) string {
 
 func setTOTPLoginChallengeCookie(responseWriter http.ResponseWriter, challenge mfa.Challenge) {
 	http.SetCookie(responseWriter, &http.Cookie{
-		Name: totpLoginChallengeCookieName, Value: challenge.Token, Path: "/", Expires: challenge.ExpiresAt,
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+		Name:     totpLoginChallengeCookieName,
+		Value:    challenge.Token,
+		Path:     "/",
+		Expires:  challenge.ExpiresAt,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 

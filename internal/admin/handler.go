@@ -58,7 +58,14 @@ type Handler struct {
 	maxImageBytes int64
 }
 
-func NewHandler(store *Store, accountStore *accounts.Store, renderer *templates.Renderer, logger *logging.Logger, imagePreview *imagepreview.Service, maxImageBytes int64) *Handler {
+func NewHandler(
+	store *Store,
+	accountStore *accounts.Store,
+	renderer *templates.Renderer,
+	logger *logging.Logger,
+	imagePreview *imagepreview.Service,
+	maxImageBytes int64,
+) *Handler {
 	return &Handler{
 		store: store, accountStore: accountStore, renderer: renderer, logger: logger,
 		imagePreview: imagePreview, maxImageBytes: maxImageBytes,
@@ -95,9 +102,20 @@ func (handler *Handler) NewProduct(responseWriter http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	handler.renderProductForm(responseWriter, request, http.StatusOK, current, "Create Product", "Create Product", "/admin/products", ProductInput{
-		ImagePath: "/product-photos/placeholder.png", IsActive: true,
-	}, "Create product", "")
+	handler.renderProductForm(
+		responseWriter,
+		request,
+		http.StatusOK,
+		current,
+		"Create Product",
+		"Create Product",
+		"/admin/products",
+		ProductInput{
+			ImagePath: "/product-photos/placeholder.png", IsActive: true,
+		},
+		"Create product",
+		"",
+	)
 }
 
 func (handler *Handler) CreateProduct(responseWriter http.ResponseWriter, request *http.Request) {
@@ -107,7 +125,18 @@ func (handler *Handler) CreateProduct(responseWriter http.ResponseWriter, reques
 	}
 	input, validationMessage := parseProductInput(request)
 	if validationMessage != "" {
-		handler.renderProductForm(responseWriter, request, http.StatusBadRequest, current, "Create Product", "Create Product", "/admin/products", input, "Create product", validationMessage)
+		handler.renderProductForm(
+			responseWriter,
+			request,
+			http.StatusBadRequest,
+			current,
+			"Create Product",
+			"Create Product",
+			"/admin/products",
+			input,
+			"Create product",
+			validationMessage,
+		)
 		return
 	}
 	product, err := handler.store.CreateProduct(request.Context(), input)
@@ -119,7 +148,7 @@ func (handler *Handler) CreateProduct(responseWriter http.ResponseWriter, reques
 }
 
 func (handler *Handler) EditProduct(responseWriter http.ResponseWriter, request *http.Request) {
-	current, ok := handler.requireProductEditor(responseWriter, request)
+	current, ok := handler.requireAdmin(responseWriter, request)
 	if !ok {
 		return
 	}
@@ -127,11 +156,22 @@ func (handler *Handler) EditProduct(responseWriter http.ResponseWriter, request 
 	if !found {
 		return
 	}
-	handler.renderProductForm(responseWriter, request, http.StatusOK, current, "Edit "+product.Name, "Edit Product", productPath(product.ID), productInput(product), "Save changes", "")
+	handler.renderProductForm(
+		responseWriter,
+		request,
+		http.StatusOK,
+		current,
+		"Edit "+product.Name,
+		"Edit Product",
+		productPath(product.ID),
+		productInput(product),
+		"Save changes",
+		"",
+	)
 }
 
 func (handler *Handler) UpdateProduct(responseWriter http.ResponseWriter, request *http.Request) {
-	current, ok := handler.requireProductEditor(responseWriter, request)
+	current, ok := handler.requireAdmin(responseWriter, request)
 	if !ok {
 		return
 	}
@@ -141,7 +181,18 @@ func (handler *Handler) UpdateProduct(responseWriter http.ResponseWriter, reques
 	}
 	input, validationMessage := parseProductInput(request)
 	if validationMessage != "" {
-		handler.renderProductForm(responseWriter, request, http.StatusBadRequest, current, "Edit "+product.Name, "Edit Product", productPath(product.ID), input, "Save changes", validationMessage)
+		handler.renderProductForm(
+			responseWriter,
+			request,
+			http.StatusBadRequest,
+			current,
+			"Edit "+product.Name,
+			"Edit Product",
+			productPath(product.ID),
+			input,
+			"Save changes",
+			validationMessage,
+		)
 		return
 	}
 	_, updated, err := handler.store.UpdateProduct(request.Context(), product.ID, input)
@@ -171,12 +222,22 @@ func (handler *Handler) Product(responseWriter http.ResponseWriter, request *htt
 	})
 }
 
-func (handler *Handler) ImagePreviewPage(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *Handler) ImagePreviewPage(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	current, ok := handler.requireAdmin(responseWriter, request)
 	if !ok {
 		return
 	}
-	handler.renderImagePreview(responseWriter, request, http.StatusOK, current.User.DisplayName, "", nil)
+	handler.renderImagePreview(
+		responseWriter,
+		request,
+		http.StatusOK,
+		current.User.DisplayName,
+		"",
+		nil,
+	)
 }
 
 func (handler *Handler) PreviewImage(responseWriter http.ResponseWriter, request *http.Request) {
@@ -186,27 +247,65 @@ func (handler *Handler) PreviewImage(responseWriter http.ResponseWriter, request
 	}
 	rawURL, err := httpx.FormValue(request, "imageUrl")
 	if err != nil {
-		handler.renderImagePreview(responseWriter, request, http.StatusBadRequest, current.User.DisplayName, "Enter an image URL.", nil)
+		handler.renderImagePreview(
+			responseWriter,
+			request,
+			http.StatusBadRequest,
+			current.User.DisplayName,
+			"Enter an image URL.",
+			nil,
+		)
 		return
 	}
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		handler.renderImagePreview(responseWriter, request, http.StatusBadRequest, current.User.DisplayName, "Enter an image URL.", nil)
+		handler.renderImagePreview(
+			responseWriter,
+			request,
+			http.StatusBadRequest,
+			current.User.DisplayName,
+			"Enter an image URL.",
+			nil,
+		)
 		return
 	}
 	preview, err := handler.imagePreview.Fetch(request.Context(), rawURL, handler.maxImageBytes)
 	if err != nil {
 		if previewError, ok := errors.AsType[*imagepreview.Error](err); ok {
-			handler.renderImagePreview(responseWriter, request, http.StatusBadGateway, current.User.DisplayName, previewError.Message, nil)
+			handler.renderImagePreview(
+				responseWriter,
+				request,
+				http.StatusBadGateway,
+				current.User.DisplayName,
+				previewError.Message,
+				nil,
+			)
 			return
 		}
-		handler.renderImagePreview(responseWriter, request, http.StatusBadGateway, current.User.DisplayName, "Bearly Secure could not fetch that URL.", nil)
+		handler.renderImagePreview(
+			responseWriter,
+			request,
+			http.StatusBadGateway,
+			current.User.DisplayName,
+			"Bearly Secure could not fetch that URL.",
+			nil,
+		)
 		return
 	}
-	handler.renderImagePreview(responseWriter, request, http.StatusOK, current.User.DisplayName, "", &preview)
+	handler.renderImagePreview(
+		responseWriter,
+		request,
+		http.StatusOK,
+		current.User.DisplayName,
+		"",
+		&preview,
+	)
 }
 
-func (handler *Handler) requireAdmin(responseWriter http.ResponseWriter, request *http.Request) (accounts.CurrentSession, bool) {
+func (handler *Handler) requireAdmin(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) (accounts.CurrentSession, bool) {
 	current, found, err := sessions.Require(responseWriter, request, handler.accountStore)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -216,13 +315,21 @@ func (handler *Handler) requireAdmin(responseWriter http.ResponseWriter, request
 		return accounts.CurrentSession{}, false
 	}
 	if current.User.Role != "admin" {
-		handler.errorPage(responseWriter, http.StatusForbidden, "Forbidden", "You don't have permission to view this page.")
+		handler.errorPage(
+			responseWriter,
+			http.StatusForbidden,
+			"Forbidden",
+			"You don't have permission to view this page.",
+		)
 		return accounts.CurrentSession{}, false
 	}
 	return current, true
 }
 
-func (handler *Handler) requireProductEditor(responseWriter http.ResponseWriter, request *http.Request) (accounts.CurrentSession, bool) {
+func (handler *Handler) requireProductEditor(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) (accounts.CurrentSession, bool) {
 	current, found, err := sessions.Require(responseWriter, request, handler.accountStore)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -232,13 +339,21 @@ func (handler *Handler) requireProductEditor(responseWriter http.ResponseWriter,
 		return accounts.CurrentSession{}, false
 	}
 	if current.User.Role != "support" && current.User.Role != "admin" {
-		handler.errorPage(responseWriter, http.StatusForbidden, "Forbidden", "You don't have permission to view this page.")
+		handler.errorPage(
+			responseWriter,
+			http.StatusForbidden,
+			"Forbidden",
+			"You don't have permission to view this page.",
+		)
 		return accounts.CurrentSession{}, false
 	}
 	return current, true
 }
 
-func (handler *Handler) requireProduct(responseWriter http.ResponseWriter, request *http.Request) (Product, bool) {
+func (handler *Handler) requireProduct(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) (Product, bool) {
 	productID, valid := httpx.ParseSafeInteger(request.PathValue("id"))
 	if !valid {
 		handler.productNotFound(responseWriter)
@@ -256,38 +371,92 @@ func (handler *Handler) requireProduct(responseWriter http.ResponseWriter, reque
 	return product, true
 }
 
-func (handler *Handler) renderProductForm(responseWriter http.ResponseWriter, request *http.Request, statusCode int, current accounts.CurrentSession, title, heading, action string, product ProductInput, submitLabel, errorMessage string) {
+func (handler *Handler) renderProductForm(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	statusCode int,
+	current accounts.CurrentSession,
+	title, heading, action string,
+	product ProductInput,
+	submitLabel, errorMessage string,
+) {
 	handler.render(responseWriter, request, statusCode, "admin-product-form", productFormPage{
 		Title: title, DisplayName: current.User.DisplayName, Heading: heading, Action: action,
 		Product: product, SubmitLabel: submitLabel, Error: errorMessage,
 	})
 }
 
-func (handler *Handler) renderImagePreview(responseWriter http.ResponseWriter, request *http.Request, statusCode int, displayName, errorMessage string, preview *imagepreview.Result) {
+func (handler *Handler) renderImagePreview(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	statusCode int,
+	displayName, errorMessage string,
+	preview *imagepreview.Result,
+) {
 	handler.render(responseWriter, request, statusCode, "image-preview", imagePreviewPage{
-		Title: "Remote Image Preview", DisplayName: displayName, Error: errorMessage, Preview: preview,
+		Title:       "Remote Image Preview",
+		DisplayName: displayName,
+		Error:       errorMessage,
+		Preview:     preview,
 	})
 }
 
-func (handler *Handler) render(responseWriter http.ResponseWriter, request *http.Request, statusCode int, templateName string, view any) {
+func (handler *Handler) render(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	statusCode int,
+	templateName string,
+	view any,
+) {
 	if err := handler.renderer.Render(responseWriter, statusCode, templateName, view); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
 func (handler *Handler) productNotFound(responseWriter http.ResponseWriter) {
-	handler.errorPage(responseWriter, http.StatusNotFound, "Product Not Found", "We couldn't find that product.")
+	handler.errorPage(
+		responseWriter,
+		http.StatusNotFound,
+		"Product Not Found",
+		"We couldn't find that product.",
+	)
 }
 
-func (handler *Handler) errorPage(responseWriter http.ResponseWriter, statusCode int, title, message string) {
-	if err := httpx.RespondWithErrorPage(responseWriter, handler.renderer, statusCode, title, message); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+func (handler *Handler) errorPage(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	title, message string,
+) {
+	if err := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		statusCode,
+		title,
+		message,
+	); err != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *Handler) internalError(responseWriter http.ResponseWriter, request *http.Request, err error) {
-	_ = handler.logger.Event("unhandled_error", map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()})
-	handler.errorPage(responseWriter, http.StatusInternalServerError, "Unhandled Error", err.Error())
+func (handler *Handler) internalError(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
+	_ = handler.logger.Event(
+		"unhandled_error",
+		map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()},
+	)
+	handler.errorPage(
+		responseWriter,
+		http.StatusInternalServerError,
+		"Unhandled Error",
+		err.Error(),
+	)
 }
 
 func parseProductInput(request *http.Request) (ProductInput, string) {
@@ -299,11 +468,19 @@ func parseProductInput(request *http.Request) (ProductInput, string) {
 	inventoryCount, inventoryPresent := nonnegativeWholeFormValue(request, "inventoryCount")
 	isActiveValue, isActivePresent := oneFormValue(request, "isActive")
 	input := ProductInput{
-		Name: strings.TrimSpace(name), Description: strings.TrimSpace(description), ImagePath: strings.TrimSpace(imagePath),
-		PriceCents: priceCents, CostCents: costCents, InventoryCount: inventoryCount,
-		IsActive: isActivePresent && isActiveValue == "1",
+		Name: strings.TrimSpace(
+			name,
+		),
+		Description:    strings.TrimSpace(description),
+		ImagePath:      strings.TrimSpace(imagePath),
+		PriceCents:     priceCents,
+		CostCents:      costCents,
+		InventoryCount: inventoryCount,
+		IsActive:       isActivePresent && isActiveValue == "1",
 	}
-	validText := namePresent && descriptionPresent && imagePathPresent && input.Name != "" && input.Description != "" && input.ImagePath != ""
+	validText := namePresent && descriptionPresent && imagePathPresent && input.Name != "" &&
+		input.Description != "" &&
+		input.ImagePath != ""
 	if !validText {
 		return input, "Name, description, and image path are required."
 	}
@@ -338,8 +515,13 @@ func nonnegativeWholeFormValue(request *http.Request, name string) (int64, bool)
 
 func productInput(product Product) ProductInput {
 	return ProductInput{
-		Name: product.Name, Description: product.Description, ImagePath: product.ImagePath, PriceCents: product.PriceCents,
-		CostCents: product.CostCents, InventoryCount: product.InventoryCount, IsActive: product.IsActive,
+		Name:           product.Name,
+		Description:    product.Description,
+		ImagePath:      product.ImagePath,
+		PriceCents:     product.PriceCents,
+		CostCents:      product.CostCents,
+		InventoryCount: product.InventoryCount,
+		IsActive:       product.IsActive,
 	}
 }
 

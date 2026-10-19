@@ -11,14 +11,16 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
+	webauthn "github.com/go-webauthn/webauthn/webauthn"
+
 	"github.com/bootdotdev/learn-web-security/internal/accounts"
 	"github.com/bootdotdev/learn-web-security/internal/auth/mfa"
+	"github.com/bootdotdev/learn-web-security/internal/auth/returnto"
 	"github.com/bootdotdev/learn-web-security/internal/auth/sessions"
 	"github.com/bootdotdev/learn-web-security/internal/httpx"
 	"github.com/bootdotdev/learn-web-security/internal/logging"
 	"github.com/bootdotdev/learn-web-security/internal/templates"
-	"github.com/go-webauthn/webauthn/protocol"
-	webauthn "github.com/go-webauthn/webauthn/webauthn"
 )
 
 const (
@@ -49,7 +51,15 @@ type Handler struct {
 	maximumRequestBytes int64
 }
 
-func NewHandler(appOrigin string, accountStore *accounts.Store, mfaStore *mfa.Store, passkeyStore *Store, renderer *templates.Renderer, logger *logging.Logger, maximumRequestBytes int64) (*Handler, error) {
+func NewHandler(
+	appOrigin string,
+	accountStore *accounts.Store,
+	mfaStore *mfa.Store,
+	passkeyStore *Store,
+	renderer *templates.Renderer,
+	logger *logging.Logger,
+	maximumRequestBytes int64,
+) (*Handler, error) {
 	parsedOrigin, err := url.Parse(appOrigin)
 	if err != nil {
 		return nil, fmt.Errorf("parse app origin for passkeys: %w", err)
@@ -74,20 +84,27 @@ func NewHandler(appOrigin string, accountStore *accounts.Store, mfaStore *mfa.St
 		return nil, fmt.Errorf("configure WebAuthn: %w", err)
 	}
 	return &Handler{
-		accounts: accountStore, mfa: mfaStore, passkeys: passkeyStore, renderer: renderer, logger: logger,
-		webauthn: webAuthn, maximumRequestBytes: maximumRequestBytes,
+		accounts:            accountStore,
+		mfa:                 mfaStore,
+		passkeys:            passkeyStore,
+		renderer:            renderer,
+		logger:              logger,
+		webauthn:            webAuthn,
+		maximumRequestBytes: maximumRequestBytes,
 	}, nil
 }
 
 func (handler *Handler) LoginPage(responseWriter http.ResponseWriter, request *http.Request) {
-	returnTo := unsafeReturnTo(request.URL.Query().Get("returnTo"))
+	returnTo := returnto.Safe(request.URL.Query().Get("returnTo"))
 	if err := handler.renderLogin(responseWriter, http.StatusOK, "", returnTo); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
 func (handler *Handler) BeginLogin(responseWriter http.ResponseWriter, request *http.Request) {
-	options, sessionData, err := handler.webauthn.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
+	options, sessionData, err := handler.webauthn.BeginDiscoverableLogin(
+		webauthn.WithUserVerification(protocol.VerificationRequired),
+	)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
@@ -97,13 +114,22 @@ func (handler *Handler) BeginLogin(responseWriter http.ResponseWriter, request *
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	httpx.RespondWithJSON(responseWriter, http.StatusOK, map[string]any{"challengeId": challenge.ID, "publicKey": options.Response})
+	httpx.RespondWithJSON(
+		responseWriter,
+		http.StatusOK,
+		map[string]any{"challengeId": challenge.ID, "publicKey": options.Response},
+	)
 }
 
 func (handler *Handler) CompleteLogin(responseWriter http.ResponseWriter, request *http.Request) {
 	challengeID, returnTo, assertion, err := handler.passkeyResponse(responseWriter, request, true)
 	if err != nil {
-		if renderErr := handler.renderLogin(responseWriter, http.StatusBadRequest, "Invalid passkey response.", "/"); renderErr != nil {
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusBadRequest,
+			"Invalid passkey response.",
+			"/",
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
@@ -114,25 +140,43 @@ func (handler *Handler) CompleteLogin(responseWriter http.ResponseWriter, reques
 		return
 	}
 	if !found {
-		if renderErr := handler.renderLogin(responseWriter, http.StatusBadRequest, "Challenge expired. Try again.", returnTo); renderErr != nil {
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusBadRequest,
+			"Challenge expired. Try again.",
+			returnTo,
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
 	}
 	credentialID, found := responseCredentialID(assertion)
 	if !found {
-		if renderErr := handler.renderLogin(responseWriter, http.StatusBadRequest, "Invalid passkey response.", returnTo); renderErr != nil {
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusBadRequest,
+			"Invalid passkey response.",
+			returnTo,
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
 	}
-	credentialAccountID, found, err := handler.passkeys.CredentialAccountID(request.Context(), credentialID)
+	credentialAccountID, found, err := handler.passkeys.CredentialAccountID(
+		request.Context(),
+		credentialID,
+	)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
 	if !found {
-		if renderErr := handler.renderLogin(responseWriter, http.StatusUnauthorized, "Passkey not recognised.", returnTo); renderErr != nil {
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusUnauthorized,
+			"Passkey not recognised.",
+			returnTo,
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
@@ -140,14 +184,27 @@ func (handler *Handler) CompleteLogin(responseWriter http.ResponseWriter, reques
 
 	parsedResponse, err := protocol.ParseCredentialRequestResponse(request)
 	if err != nil {
-		_ = handler.logger.Event("passkey_login_failed", map[string]any{"credentialId": credentialID, "error": err.Error()})
-		if renderErr := handler.renderLogin(responseWriter, http.StatusUnauthorized, "Passkey verification failed.", returnTo); renderErr != nil {
+		_ = handler.logger.Event(
+			"passkey_login_failed",
+			map[string]any{"credentialId": credentialID, "error": err.Error()},
+		)
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusUnauthorized,
+			"Passkey verification failed.",
+			returnTo,
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
 	}
 	if encodeBase64URL(parsedResponse.RawID) != credentialID {
-		if renderErr := handler.renderLogin(responseWriter, http.StatusUnauthorized, "Passkey verification failed.", returnTo); renderErr != nil {
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusUnauthorized,
+			"Passkey verification failed.",
+			returnTo,
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
@@ -158,7 +215,12 @@ func (handler *Handler) CompleteLogin(responseWriter http.ResponseWriter, reques
 		return
 	}
 	if !found {
-		if renderErr := handler.renderLogin(responseWriter, http.StatusInternalServerError, "User not found.", returnTo); renderErr != nil {
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusInternalServerError,
+			"User not found.",
+			returnTo,
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
@@ -170,11 +232,20 @@ func (handler *Handler) CompleteLogin(responseWriter http.ResponseWriter, reques
 	}
 	sessionData := challenge.SessionData
 	sessionData.UserID = user.WebAuthnID()
-	var credential *webauthn.Credential
-	err = errors.New("passkey assertion validation is not implemented")
+	credential, err := handler.webauthn.ValidateLogin(user, sessionData, parsedResponse)
+	// var credential *webauthn.Credential
+	// err = errors.New("passkey assertion validation is not implemented")
 	if err != nil {
-		_ = handler.logger.Event("passkey_login_failed", map[string]any{"credentialId": credentialID, "error": err.Error()})
-		if renderErr := handler.renderLogin(responseWriter, http.StatusUnauthorized, "Passkey verification failed.", returnTo); renderErr != nil {
+		_ = handler.logger.Event(
+			"passkey_login_failed",
+			map[string]any{"credentialId": credentialID, "error": err.Error()},
+		)
+		if renderErr := handler.renderLogin(
+			responseWriter,
+			http.StatusUnauthorized,
+			"Passkey verification failed.",
+			returnTo,
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
@@ -188,11 +259,17 @@ func (handler *Handler) CompleteLogin(responseWriter http.ResponseWriter, reques
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	if err := handler.mfa.DeleteChallenge(request.Context(), totpLoginChallengeToken(request)); err != nil {
+	if err := handler.mfa.DeleteChallenge(
+		request.Context(),
+		totpLoginChallengeToken(request),
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	_ = handler.logger.Event("passkey_login_success", map[string]any{"userId": account.ID, "email": account.Email, "credentialId": credentialID})
+	_ = handler.logger.Event(
+		"passkey_login_success",
+		map[string]any{"userId": account.ID, "email": account.Email, "credentialId": credentialID},
+	)
 	sessions.SetCookie(responseWriter, session)
 	if totpLoginChallengeToken(request) != "" {
 		clearTOTPLoginChallengeCookie(responseWriter)
@@ -201,7 +278,12 @@ func (handler *Handler) CompleteLogin(responseWriter http.ResponseWriter, reques
 }
 
 func (handler *Handler) ManagePage(responseWriter http.ResponseWriter, request *http.Request) {
-	current, found, err := sessions.RequireWithReturnTo(responseWriter, request, handler.accounts, "/account/passkey")
+	current, found, err := sessions.RequireWithReturnTo(
+		responseWriter,
+		request,
+		handler.accounts,
+		"/account/passkey",
+	)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
@@ -209,12 +291,21 @@ func (handler *Handler) ManagePage(responseWriter http.ResponseWriter, request *
 	if !found {
 		return
 	}
-	if err := handler.renderManage(request.Context(), responseWriter, http.StatusOK, current, ""); err != nil {
+	if err := handler.renderManage(
+		request.Context(),
+		responseWriter,
+		http.StatusOK,
+		current,
+		"",
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 	}
 }
 
-func (handler *Handler) BeginRegistration(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *Handler) BeginRegistration(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	current, found, err := sessions.Current(request, handler.accounts)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -225,7 +316,11 @@ func (handler *Handler) BeginRegistration(responseWriter http.ResponseWriter, re
 		return
 	}
 	if !sessions.HasRecentAuthentication(current, time.Now()) {
-		httpx.RespondWithError(responseWriter, http.StatusForbidden, "Log in again before registering a passkey")
+		httpx.RespondWithError(
+			responseWriter,
+			http.StatusForbidden,
+			"Log in again before registering a passkey",
+		)
 		return
 	}
 	user, err := handler.passkeys.User(request.Context(), current.User)
@@ -248,15 +343,26 @@ func (handler *Handler) BeginRegistration(responseWriter http.ResponseWriter, re
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	challenge, err := handler.passkeys.CreateChallenge(request.Context(), &current.User.ID, *sessionData)
+	challenge, err := handler.passkeys.CreateChallenge(
+		request.Context(),
+		&current.User.ID,
+		*sessionData,
+	)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	httpx.RespondWithJSON(responseWriter, http.StatusOK, map[string]any{"challengeId": challenge.ID, "publicKey": options.Response})
+	httpx.RespondWithJSON(
+		responseWriter,
+		http.StatusOK,
+		map[string]any{"challengeId": challenge.ID, "publicKey": options.Response},
+	)
 }
 
-func (handler *Handler) CompleteRegistration(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *Handler) CompleteRegistration(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	current, found, err := sessions.Current(request, handler.accounts)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
@@ -267,14 +373,26 @@ func (handler *Handler) CompleteRegistration(responseWriter http.ResponseWriter,
 		return
 	}
 	if !sessions.HasRecentAuthentication(current, time.Now()) {
-		if renderErr := handler.renderManage(request.Context(), responseWriter, http.StatusForbidden, current, "Log in again before registering a passkey."); renderErr != nil {
+		if renderErr := handler.renderManage(
+			request.Context(),
+			responseWriter,
+			http.StatusForbidden,
+			current,
+			"Log in again before registering a passkey.",
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
 	}
 	challengeID, _, _, err := handler.passkeyResponse(responseWriter, request, false)
 	if err != nil {
-		if renderErr := handler.renderManage(request.Context(), responseWriter, http.StatusBadRequest, current, "Challenge expired. Try again."); renderErr != nil {
+		if renderErr := handler.renderManage(
+			request.Context(),
+			responseWriter,
+			http.StatusBadRequest,
+			current,
+			"Challenge expired. Try again.",
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
@@ -285,7 +403,13 @@ func (handler *Handler) CompleteRegistration(responseWriter http.ResponseWriter,
 		return
 	}
 	if !found || challenge.UserID == nil || *challenge.UserID != current.User.ID {
-		if renderErr := handler.renderManage(request.Context(), responseWriter, http.StatusBadRequest, current, "Challenge expired. Try again."); renderErr != nil {
+		if renderErr := handler.renderManage(
+			request.Context(),
+			responseWriter,
+			http.StatusBadRequest,
+			current,
+			"Challenge expired. Try again.",
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
@@ -297,44 +421,88 @@ func (handler *Handler) CompleteRegistration(responseWriter http.ResponseWriter,
 	}
 	credential, err := handler.webauthn.FinishRegistration(user, challenge.SessionData, request)
 	if err != nil {
-		_ = handler.logger.Event("passkey_registration_failed", map[string]any{"userId": current.User.ID, "error": err.Error()})
-		if renderErr := handler.renderManage(request.Context(), responseWriter, http.StatusBadRequest, current, "Registration failed. Try again."); renderErr != nil {
+		_ = handler.logger.Event(
+			"passkey_registration_failed",
+			map[string]any{"userId": current.User.ID, "error": err.Error()},
+		)
+		if renderErr := handler.renderManage(
+			request.Context(),
+			responseWriter,
+			http.StatusBadRequest,
+			current,
+			"Registration failed. Try again.",
+		); renderErr != nil {
 			handler.internalError(responseWriter, request, renderErr)
 		}
 		return
 	}
-	if err := handler.passkeys.StoreCredential(request.Context(), current.User.ID, *credential); err != nil {
+	if err := handler.passkeys.StoreCredential(
+		request.Context(),
+		current.User.ID,
+		*credential,
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	_ = handler.logger.Event("passkey_registered", map[string]any{"userId": current.User.ID, "email": current.User.Email, "credentialId": encodeBase64URL(credential.ID)})
+	_ = handler.logger.Event(
+		"passkey_registered",
+		map[string]any{
+			"userId":       current.User.ID,
+			"email":        current.User.Email,
+			"credentialId": encodeBase64URL(credential.ID),
+		},
+	)
 	http.Redirect(responseWriter, request, "/account/passkey", http.StatusFound)
 }
 
-func (handler *Handler) DeleteCredential(responseWriter http.ResponseWriter, request *http.Request) {
+func (handler *Handler) DeleteCredential(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+) {
 	current, found, err := sessions.Current(request, handler.accounts)
 	if err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
 	if !found || !sessions.HasRecentAuthentication(current, time.Now()) {
-		http.Redirect(responseWriter, request, "/login?returnTo=%2Faccount%2Fpasskey", http.StatusFound)
+		http.Redirect(
+			responseWriter,
+			request,
+			"/login?returnTo=%2Faccount%2Fpasskey",
+			http.StatusFound,
+		)
 		return
 	}
 	credentialID, valid := httpx.ParseSafeInteger(request.PathValue("id"))
 	if !valid {
-		handler.errorPage(responseWriter, http.StatusNotFound, "Passkey Not Found", "We couldn't find that passkey.")
+		handler.errorPage(
+			responseWriter,
+			http.StatusNotFound,
+			"Passkey Not Found",
+			"We couldn't find that passkey.",
+		)
 		return
 	}
-	if err := handler.passkeys.DeleteCredential(request.Context(), credentialID, current.User.ID); err != nil {
+	if err := handler.passkeys.DeleteCredential(
+		request.Context(),
+		credentialID,
+		current.User.ID,
+	); err != nil {
 		handler.internalError(responseWriter, request, err)
 		return
 	}
-	_ = handler.logger.Event("passkey_deleted", map[string]any{"userId": current.User.ID, "passkeyId": credentialID})
+	_ = handler.logger.Event(
+		"passkey_deleted",
+		map[string]any{"userId": current.User.ID, "passkeyId": credentialID},
+	)
 	http.Redirect(responseWriter, request, "/account/passkey", http.StatusFound)
 }
 
-func (handler *Handler) passkeyResponse(responseWriter http.ResponseWriter, request *http.Request, hasReturnTo bool) (string, string, map[string]json.RawMessage, error) {
+func (handler *Handler) passkeyResponse(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	hasReturnTo bool,
+) (string, string, map[string]json.RawMessage, error) {
 	request.Body = http.MaxBytesReader(responseWriter, request.Body, handler.maximumRequestBytes)
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -356,7 +524,7 @@ func (handler *Handler) passkeyResponse(responseWriter http.ResponseWriter, requ
 			if err != nil {
 				return "", "/", nil, err
 			}
-			returnTo = unsafeReturnTo(returnToValue)
+			returnTo = returnto.Safe(returnToValue)
 		}
 		delete(responseFields, "returnTo")
 	}
@@ -367,13 +535,6 @@ func (handler *Handler) passkeyResponse(responseWriter http.ResponseWriter, requ
 	request.Body = io.NopCloser(bytes.NewReader(encodedResponse))
 	request.ContentLength = int64(len(encodedResponse))
 	return challengeID, returnTo, responseFields, nil
-}
-
-func unsafeReturnTo(value string) string {
-	if value == "" {
-		return "/"
-	}
-	return value
 }
 
 func responseCredentialID(responseFields map[string]json.RawMessage) (string, bool) {
@@ -393,31 +554,70 @@ func stringField(fields map[string]json.RawMessage, name string) (string, error)
 	return value, nil
 }
 
-func (handler *Handler) renderLogin(responseWriter http.ResponseWriter, statusCode int, errorMessage, returnTo string) error {
+func (handler *Handler) renderLogin(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	errorMessage, returnTo string,
+) error {
 	return handler.renderer.Render(responseWriter, statusCode, "passkey-login", loginPageView{
 		Title: "Sign In with Passkey", Error: errorMessage, ReturnTo: returnTo,
 	})
 }
 
-func (handler *Handler) renderManage(ctx context.Context, responseWriter http.ResponseWriter, statusCode int, current accounts.CurrentSession, errorMessage string) error {
+func (handler *Handler) renderManage(
+	ctx context.Context,
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	current accounts.CurrentSession,
+	errorMessage string,
+) error {
 	credentials, err := handler.passkeys.ListCredentials(ctx, current.User.ID)
 	if err != nil {
 		return err
 	}
 	return handler.renderer.Render(responseWriter, statusCode, "passkey-manage", managePageView{
-		Title: "Passkeys", Credentials: credentials, DisplayName: current.User.DisplayName, Error: errorMessage,
+		Title:       "Passkeys",
+		Credentials: credentials,
+		DisplayName: current.User.DisplayName,
+		Error:       errorMessage,
 	})
 }
 
-func (handler *Handler) errorPage(responseWriter http.ResponseWriter, statusCode int, title, message string) {
-	if err := httpx.RespondWithErrorPage(responseWriter, handler.renderer, statusCode, title, message); err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+func (handler *Handler) errorPage(
+	responseWriter http.ResponseWriter,
+	statusCode int,
+	title, message string,
+) {
+	if err := httpx.RespondWithErrorPage(
+		responseWriter,
+		handler.renderer,
+		statusCode,
+		title,
+		message,
+	); err != nil {
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 	}
 }
 
-func (handler *Handler) internalError(responseWriter http.ResponseWriter, request *http.Request, err error) {
-	_ = handler.logger.Event("unhandled_error", map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()})
-	handler.errorPage(responseWriter, http.StatusInternalServerError, "Unhandled Error", err.Error())
+func (handler *Handler) internalError(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
+	_ = handler.logger.Event(
+		"unhandled_error",
+		map[string]any{"method": request.Method, "path": request.URL.Path, "message": err.Error()},
+	)
+	handler.errorPage(
+		responseWriter,
+		http.StatusInternalServerError,
+		"Unhandled Error",
+		err.Error(),
+	)
 }
 
 func totpLoginChallengeToken(request *http.Request) string {
