@@ -13,7 +13,7 @@ COPY --from=build /out/bearly-secure ./bearly-secure
 COPY --from=build /out/bearly-attacker-lab ./bearly-attacker-lab
 COPY --from=build /app/attacker-lab ./attacker-lab
 COPY --from=build /app/web ./web
-COPY --from=build /app/data/uploads/mystery-shack-tax-exemption.pdf ./data/uploads/mystery-shack-tax-exemption.pdf
+COPY --from=build /app/data/fixtures ./data/fixtures
 RUN chown bearly:bearly ./data ./data/uploads
 USER bearly
 CMD ["./bearly-secure"]

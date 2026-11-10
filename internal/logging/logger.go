@@ -23,6 +23,13 @@ var maskedFields = map[string]any{
 	"secret":      "[REDACTED]",
 	"adminNotes":  "[REDACTED]",
 	"storagePath": "[REDACTED]",
+	"email": "[REDACTED]",
+	"shippingName": "[REDACTED]",
+	"shippingAddress": "[REDACTED]",
+	"shippingCity": "[REDACTED]",
+	"shippingRegion": "[REDACTED]",
+	"shippingPostalCode": "[REDACTED]",
+	"originalName": "[REDACTED]",
 }
 
 func Open(filePath string) (*Logger, error) {

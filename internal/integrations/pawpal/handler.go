@@ -35,10 +35,18 @@ func (handler *Handler) Webhook(responseWriter http.ResponseWriter, request *htt
 		return
 	}
 
-	verification := VerifyWebhook(payload)
+	verification := VerifyWebhook(
+		[]byte(request.Header.Get("X-PawPal-Key")),
+		[]byte(handler.apiKey),
+		payload,
+	)
 	switch verification.Outcome {
 	case WebhookUnauthorized:
-		http.Error(responseWriter, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized,
+		)
 		return
 	case WebhookMalformed:
 		http.Error(responseWriter, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -47,13 +55,20 @@ func (handler *Handler) Webhook(responseWriter http.ResponseWriter, request *htt
 
 	approved, err := handler.orderStore.ApprovePawPalOrder(request.Context(), verification.OrderID)
 	if err != nil {
-		http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		http.Error(
+			responseWriter,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError,
+		)
 		return
 	}
 	if !approved {
 		http.Error(responseWriter, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	_ = handler.logger.Event("pawpal_payment_approved", map[string]any{"orderId": verification.OrderID})
+	_ = handler.logger.Event(
+		"pawpal_payment_approved",
+		map[string]any{"orderId": verification.OrderID},
+	)
 	responseWriter.WriteHeader(http.StatusNoContent)
 }

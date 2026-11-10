@@ -67,12 +67,13 @@ func detectDocumentType(contents []byte) (mime, extension string, isValid bool) 
 	return "", "", false
 }
 
-func encryptDocument(contents []byte, _ Keyring) (string, bool, error) {
-	return string(contents), false, nil
+func encryptDocument(contents []byte, keys Keyring) (string, bool, error) {
+	serializedPayload, err := keys.Encrypt(contents)
+	return string(serializedPayload), err == nil, err
 }
 
-func decryptDocument(storedContents string, _ Keyring) ([]byte, error) {
-	return []byte(storedContents), nil
+func decryptDocument(storedContents string, keys Keyring) ([]byte, error) {
+	return keys.Decrypt(storedContents)
 }
 
 func writeDocument(storagePath, storedContents string, encrypted bool) error {

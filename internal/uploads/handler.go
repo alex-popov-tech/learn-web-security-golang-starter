@@ -268,6 +268,9 @@ func (handler *Handler) readUpload(
 	if len(files) == 0 {
 		return nil, "", errors.New("missing document upload")
 	}
+	if len(files) > 1 {
+		return nil, "", errors.New("must be only 1 file")
+	}
 	file, err := files[0].Open()
 	if err != nil {
 		return nil, "", fmt.Errorf("open document upload: %w", err)
